@@ -3,6 +3,7 @@ import 'dart:ui';
 
 import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart' as xml;
+import '../../config/api_config.dart';
 import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -58,7 +59,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
 
       // Use localhost when running locally on web.
       final response = await http.post(
-        Uri.parse('http://localhost:8080/public/SoapServer.php'),
+        Uri.parse('${ApiConfig.usersUrl}/public/SoapServer.php'),
         headers: {
           'Content-Type': 'text/xml; charset=utf-8',
           'SOAPAction': 'urn:upbcientifica:user-service#authenticateUser',

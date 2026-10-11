@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import '../../config/api_config.dart';
 import 'preview_screen.dart';
 
 class PublicViewScreen extends StatefulWidget {
@@ -26,7 +27,7 @@ class _PublicViewScreenState extends State<PublicViewScreen> {
   Future<void> _fetchPublicFile() async {
     try {
       final response = await http.get(
-        Uri.parse('http://localhost:3000/api/files/files/${widget.fileId}'),
+        Uri.parse('${ApiConfig.streamingUrl}/api/files/files/${widget.fileId}'),
       );
 
       if (response.statusCode == 200) {

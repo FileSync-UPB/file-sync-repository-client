@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:html' as html;
 import 'dart:ui_web' as ui_web;
+import '../../config/api_config.dart';
 
 class PreviewScreen extends StatefulWidget {
   final String id;
@@ -30,8 +31,8 @@ class _PreviewScreenState extends State<PreviewScreen> {
   void initState() {
     super.initState();
     _url = widget.token.isEmpty
-        ? 'http://localhost:3000/api/files/files/${widget.id}/content'
-        : 'http://localhost:3000/api/files/files/${widget.id}/content?token=${Uri.encodeComponent(widget.token)}';
+        ? '${ApiConfig.streamingUrl}/api/files/files/${widget.id}/content'
+        : '${ApiConfig.streamingUrl}/api/files/files/${widget.id}/content?token=${Uri.encodeComponent(widget.token)}';
 
     final ext = widget.name.split('.').last.toLowerCase();
     _isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].contains(ext) ||

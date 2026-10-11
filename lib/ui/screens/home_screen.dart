@@ -4,6 +4,19 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'preview_screen.dart';
 import 'share_dialog_inner.dart';
+import 'sync_screen.dart';
+import 'hpc_screen.dart';
+import '../../config/api_config.dart';
+
+enum FileSection {
+  myDrive,
+  sharedWithMe,
+  recent,
+  starred,
+  trash,
+  sync,
+  hpc,
+}
 
 class HomeScreen extends StatefulWidget {
   final String token;
@@ -24,6 +37,8 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = true;
   bool _isUploading = false;
   String? _errorMessage;
+
+  FileSection _currentSection = FileSection.myDrive;
 
   // Folder navigation state
   String? _currentParentId;
@@ -54,7 +69,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _fetchUsage() async {
     try {
       final response = await http.get(
-        Uri.parse('http://localhost:3000/api/files/usage'),
+        Uri.parse('${ApiConfig.streamingUrl}/api/files/usage'),
         headers: {'Authorization': 'Bearer ${widget.token}'},
       );
       if (response.statusCode == 200) {
@@ -70,15 +85,45 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _fetchFiles() async {
+    if (_currentSection == FileSection.sync || _currentSection == FileSection.hpc) {
+      setState(() {
+        _isLoading = false;
+        _errorMessage = null;
+      });
+      return;
+    }
+
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
 
     try {
-      var urlStr = 'http://localhost:3000/api/files';
+      String urlStr;
       if (_currentParentId != null) {
-        urlStr += '?parentId=${Uri.encodeComponent(_currentParentId!)}';
+        urlStr = '${ApiConfig.streamingUrl}/api/files?parentId=${Uri.encodeComponent(_currentParentId!)}';
+      } else {
+        switch (_currentSection) {
+          case FileSection.myDrive:
+            urlStr = '${ApiConfig.streamingUrl}/api/files';
+            break;
+          case FileSection.sharedWithMe:
+            urlStr = '${ApiConfig.streamingUrl}/api/files/shared';
+            break;
+          case FileSection.recent:
+            urlStr = '${ApiConfig.streamingUrl}/api/files/recent';
+            break;
+          case FileSection.starred:
+            urlStr = '${ApiConfig.streamingUrl}/api/files/starred';
+            break;
+          case FileSection.trash:
+            urlStr = '${ApiConfig.streamingUrl}/api/files/trash';
+            break;
+          case FileSection.sync:
+          case FileSection.hpc:
+            urlStr = '${ApiConfig.streamingUrl}/api/files';
+            break;
+        }
       }
 
       final response = await http.get(
@@ -173,7 +218,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _createFolder(String name) async {
     try {
       final response = await http.post(
-        Uri.parse('http://localhost:3000/api/files/folders'),
+        Uri.parse('${ApiConfig.streamingUrl}/api/files/folders'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer ${widget.token}',
@@ -185,29 +230,35 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 
       if (response.statusCode == 201) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Carpeta "$name" creada exitosamente.'),
-            backgroundColor: Colors.green[700],
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Carpeta "$name" creada exitosamente.'),
+              backgroundColor: Colors.green[700],
+            ),
+          );
+        }
         _fetchFiles();
       } else {
         final err = jsonDecode(response.body);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error: ${err['error'] ?? 'No se pudo crear la carpeta'}'),
+              backgroundColor: Colors.red[700],
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error: ${err['error'] ?? 'No se pudo crear la carpeta'}'),
+            content: Text('Error de red al crear carpeta: $e'),
             backgroundColor: Colors.red[700],
           ),
         );
       }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error de red al crear carpeta: $e'),
-          backgroundColor: Colors.red[700],
-        ),
-      );
     }
   }
 
@@ -232,7 +283,7 @@ class _HomeScreenState extends State<HomeScreen> {
         await reader.onLoad.first;
         final bytes = reader.result as List<int>;
 
-        final uri = Uri.parse('http://localhost:3000/api/files/upload');
+        final uri = Uri.parse('${ApiConfig.streamingUrl}/api/files/upload');
         final request = http.MultipartRequest('POST', uri);
         request.headers['Authorization'] = 'Bearer ${widget.token}';
 
@@ -251,29 +302,35 @@ class _HomeScreenState extends State<HomeScreen> {
         final response = await http.Response.fromStream(streamedResponse);
 
         if (response.statusCode == 201) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Archivo "${file.name}" subido con éxito.'),
-              backgroundColor: Colors.green[700],
-            ),
-          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Archivo "${file.name}" subido con éxito.'),
+                backgroundColor: Colors.green[700],
+              ),
+            );
+          }
           _fetchFiles();
           _fetchUsage();
         } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error al subir (${response.statusCode}): ${response.body}'),
+                backgroundColor: Colors.red[700],
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Error al subir (${response.statusCode}): ${response.body}'),
+              content: Text('Error de subida: $e'),
               backgroundColor: Colors.red[700],
             ),
           );
         }
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error de subida: $e'),
-            backgroundColor: Colors.red[700],
-          ),
-        );
       } finally {
         if (mounted) {
           setState(() {
@@ -291,7 +348,7 @@ class _HomeScreenState extends State<HomeScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Confirmar Eliminación'),
         content: Text(
-          '¿Estás seguro de que deseas enviar "${name}" a la papelera?',
+          '¿Estás seguro de que deseas enviar "$name" a la papelera?',
         ),
         actions: [
           TextButton(
@@ -313,41 +370,47 @@ class _HomeScreenState extends State<HomeScreen> {
     if (confirmed == true) {
       try {
         final response = await http.delete(
-          Uri.parse('http://localhost:3000/api/files/files/$id'),
+          Uri.parse('${ApiConfig.streamingUrl}/api/files/files/$id'),
           headers: {'Authorization': 'Bearer ${widget.token}'},
         );
 
         if (response.statusCode == 200) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('"$name" movido a la papelera.'),
-              backgroundColor: Colors.green[700],
-            ),
-          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('"$name" movido a la papelera.'),
+                backgroundColor: Colors.green[700],
+              ),
+            );
+          }
           _fetchFiles();
           _fetchUsage();
         } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error al eliminar: ${response.statusCode}'),
+                backgroundColor: Colors.red[700],
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Error al eliminar: ${response.statusCode}'),
+              content: Text('Error al eliminar: $e'),
               backgroundColor: Colors.red[700],
             ),
           );
         }
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al eliminar: $e'),
-            backgroundColor: Colors.red[700],
-          ),
-        );
       }
     }
   }
 
   void _downloadFile(String id, String name) {
     final downloadUrl =
-        'http://localhost:3000/api/files/files/$id/content?token=${Uri.encodeComponent(widget.token)}';
+        '${ApiConfig.streamingUrl}/api/files/files/$id/content?token=${Uri.encodeComponent(widget.token)}';
     html.AnchorElement(href: downloadUrl)
       ..setAttribute('download', name)
       ..click();
@@ -390,6 +453,256 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _switchSection(FileSection section) {
+    if (_currentSection == section) return;
+    setState(() {
+      _currentSection = section;
+      _currentParentId = null;
+      _breadcrumbs.clear();
+      _breadcrumbs.add({'id': null, 'name': _getSectionTitle(section)});
+    });
+    _fetchFiles();
+  }
+
+  String _getSectionTitle(FileSection section) {
+    switch (section) {
+      case FileSection.myDrive:
+        return 'Mi Unidad';
+      case FileSection.sharedWithMe:
+        return 'Compartidos conmigo';
+      case FileSection.recent:
+        return 'Recientes';
+      case FileSection.starred:
+        return 'Destacados';
+      case FileSection.trash:
+        return 'Papelera';
+      case FileSection.sync:
+        return 'Sincronización de Dispositivos';
+      case FileSection.hpc:
+        return 'Computación de Alto Rendimiento';
+    }
+  }
+
+  String _getSectionSubtitle(FileSection section) {
+    switch (section) {
+      case FileSection.myDrive:
+        return 'Tus archivos y carpetas en la nube';
+      case FileSection.sharedWithMe:
+        return 'Archivos compartidos contigo por otros colaboradores';
+      case FileSection.recent:
+        return 'Archivos consultados o modificados recientemente';
+      case FileSection.starred:
+        return 'Elementos marcados con estrella para acceso rápido';
+      case FileSection.trash:
+        return 'Elementos eliminados que puedes restaurar o borrar definitivamente';
+      case FileSection.sync:
+        return 'Estado y control de sincronización automática de clientes Windows, Linux y Android';
+      case FileSection.hpc:
+        return 'Ejecución acelerada y distribuida de algoritmos científicos, análisis de datos y procesamiento intensivo';
+    }
+  }
+
+  IconData _getSectionEmptyIcon(FileSection section) {
+    switch (section) {
+      case FileSection.myDrive:
+        return Icons.folder_open;
+      case FileSection.sharedWithMe:
+        return Icons.people_outline;
+      case FileSection.recent:
+        return Icons.access_time;
+      case FileSection.starred:
+        return Icons.star_border;
+      case FileSection.trash:
+        return Icons.delete_outline;
+      case FileSection.sync:
+        return Icons.sync_alt;
+      case FileSection.hpc:
+        return Icons.rocket_launch_rounded;
+    }
+  }
+
+  String _getSectionEmptyTitle(FileSection section) {
+    switch (section) {
+      case FileSection.myDrive:
+        return 'Esta carpeta está vacía';
+      case FileSection.sharedWithMe:
+        return 'No hay archivos compartidos contigo';
+      case FileSection.recent:
+        return 'No hay archivos recientes';
+      case FileSection.starred:
+        return 'No tienes elementos destacados';
+      case FileSection.trash:
+        return 'La papelera está vacía';
+      case FileSection.sync:
+        return 'Panel de sincronización';
+      case FileSection.hpc:
+        return 'Panel de Computación Avanzada';
+    }
+  }
+
+  String _getSectionEmptySubtitle(FileSection section) {
+    switch (section) {
+      case FileSection.myDrive:
+        return 'Crea una nueva carpeta o sube archivos para comenzar';
+      case FileSection.sharedWithMe:
+        return 'Cuando otros usuarios compartan archivos contigo, aparecerán aquí';
+      case FileSection.recent:
+        return 'Los archivos que abras o subas recientemente se mostrarán aquí';
+      case FileSection.starred:
+        return 'Usa la opción de destacar en cualquier archivo para tenerlo a mano';
+      case FileSection.trash:
+        return 'Los elementos que envíes a la papelera aparecerán en este apartado';
+      case FileSection.sync:
+        return 'Administra tus dispositivos y políticas de red';
+      case FileSection.hpc:
+        return 'Configura parámetros y envía tareas de procesamiento distribuido';
+    }
+  }
+
+  Future<void> _toggleStar(String id) async {
+    try {
+      final response = await http.post(
+        Uri.parse('${ApiConfig.streamingUrl}/api/files/$id/star'),
+        headers: {'Authorization': 'Bearer ${widget.token}'},
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final isStarred = data['isStarred'] ?? false;
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(isStarred ? 'Marcado como destacado' : 'Desmarcado de destacados'),
+              duration: const Duration(seconds: 1),
+              backgroundColor: const Color(0xFF4F46E5),
+            ),
+          );
+        }
+        _fetchFiles();
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _restoreItem(String id, String name) async {
+    try {
+      final response = await http.post(
+        Uri.parse('${ApiConfig.streamingUrl}/api/files/trash/$id/restore'),
+        headers: {'Authorization': 'Bearer ${widget.token}'},
+      );
+      if (response.statusCode == 200) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('"$name" restaurado con éxito.'),
+              backgroundColor: Colors.green[700],
+            ),
+          );
+        }
+        _fetchFiles();
+        _fetchUsage();
+      } else {
+        final err = jsonDecode(response.body);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error al restaurar: ${err['error'] ?? response.body}'),
+              backgroundColor: Colors.red[700],
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red[700]),
+        );
+      }
+    }
+  }
+
+  Future<void> _deletePermanently(String id, String name) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Eliminar definitivamente'),
+        content: Text('¿Deseas eliminar permanentemente "$name"? Esta acción no se puede deshacer.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red[700], foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Eliminar para siempre'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      try {
+        final response = await http.delete(
+          Uri.parse('${ApiConfig.streamingUrl}/api/files/trash/$id/permanent'),
+          headers: {'Authorization': 'Bearer ${widget.token}'},
+        );
+        if (response.statusCode == 200) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('"$name" eliminado permanentemente.'), backgroundColor: Colors.green[700]),
+            );
+          }
+          _fetchFiles();
+          _fetchUsage();
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red[700]),
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _emptyTrashDialog() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Vaciar Papelera'),
+        content: const Text('¿Estás seguro de que deseas vaciar toda la papelera? Todos los elementos se eliminarán de forma permanente.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red[700], foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Vaciar Todo'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      try {
+        final response = await http.delete(
+          Uri.parse('${ApiConfig.streamingUrl}/api/files/trash/empty'),
+          headers: {'Authorization': 'Bearer ${widget.token}'},
+        );
+        if (response.statusCode == 200) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Papelera vaciada por completo.'), backgroundColor: Colors.green),
+            );
+          }
+          _fetchFiles();
+          _fetchUsage();
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red[700]),
+          );
+        }
+      }
+    }
+  }
+
   void _navigateToBreadcrumb(int index) {
     if (index == _breadcrumbs.length - 1) return;
     setState(() {
@@ -398,6 +711,66 @@ class _HomeScreenState extends State<HomeScreen> {
       _breadcrumbs.removeRange(index + 1, _breadcrumbs.length);
     });
     _fetchFiles();
+  }
+
+  Future<void> _moveItem(String id, String name, String? targetParentId, String targetFolderName) async {
+    try {
+      final response = await http.patch(
+        Uri.parse('${ApiConfig.streamingUrl}/api/files/files/$id'),
+        headers: {
+          'Authorization': 'Bearer ${widget.token}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'parentId': targetParentId,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('"$name" se movió a "$targetFolderName".'),
+              backgroundColor: Colors.green[700],
+            ),
+          );
+        }
+        _fetchFiles();
+        _fetchUsage();
+      } else {
+        final err = jsonDecode(response.body);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error al mover: ${err['error'] ?? response.body}'),
+              backgroundColor: Colors.red[700],
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error de conexión al mover: $e'),
+            backgroundColor: Colors.red[700],
+          ),
+        );
+      }
+    }
+  }
+
+  void _showMoveDialog(Map<String, dynamic> item) {
+    showDialog(
+      context: context,
+      builder: (ctx) => MoveFileDialog(
+        item: item,
+        token: widget.token,
+        onMoved: (targetParentId, targetFolderName) {
+          _moveItem(item['id'].toString(), item['name'] ?? '', targetParentId, targetFolderName);
+        },
+      ),
+    );
   }
 
   IconData _getFileIcon(String? mimeType, String name) {
@@ -551,11 +924,51 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildSidebarItem(Icons.storage, 'Mi Unidad', true),
-                _buildSidebarItem(Icons.group_outlined, 'Compartidos conmigo', false),
-                _buildSidebarItem(Icons.access_time, 'Recientes', false),
-                _buildSidebarItem(Icons.star_outline, 'Destacados', false),
-                _buildSidebarItem(Icons.delete_outline, 'Papelera', false),
+                _buildSidebarItem(
+                  Icons.storage,
+                  'Mi Unidad',
+                  _currentSection == FileSection.myDrive,
+                  () => _switchSection(FileSection.myDrive),
+                ),
+                _buildSidebarItem(
+                  Icons.group_outlined,
+                  'Compartidos conmigo',
+                  _currentSection == FileSection.sharedWithMe,
+                  () => _switchSection(FileSection.sharedWithMe),
+                ),
+                _buildSidebarItem(
+                  Icons.access_time,
+                  'Recientes',
+                  _currentSection == FileSection.recent,
+                  () => _switchSection(FileSection.recent),
+                ),
+                _buildSidebarItem(
+                  Icons.star_outline,
+                  'Destacados',
+                  _currentSection == FileSection.starred,
+                  () => _switchSection(FileSection.starred),
+                ),
+                _buildSidebarItem(
+                  Icons.delete_outline,
+                  'Papelera',
+                  _currentSection == FileSection.trash,
+                  () => _switchSection(FileSection.trash),
+                ),
+                const SizedBox(height: 8),
+                const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                const SizedBox(height: 8),
+                _buildSidebarItem(
+                  Icons.sync_alt,
+                  'Sincronización (Sync)',
+                  _currentSection == FileSection.sync,
+                  () => _switchSection(FileSection.sync),
+                ),
+                _buildSidebarItem(
+                  Icons.rocket_launch_rounded,
+                  'Computación de Alto Rendimiento',
+                  _currentSection == FileSection.hpc,
+                  () => _switchSection(FileSection.hpc),
+                ),
                 const Spacer(),
                 // Storage Bar
                 Container(
@@ -617,39 +1030,87 @@ class _HomeScreenState extends State<HomeScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      // Breadcrumbs navigation
-                      Expanded(
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            children: List.generate(_breadcrumbs.length, (index) {
-                              final b = _breadcrumbs[index];
-                              final isLast = index == _breadcrumbs.length - 1;
-                              return Row(
-                                children: [
-                                  InkWell(
-                                    onTap: () => _navigateToBreadcrumb(index),
-                                    borderRadius: BorderRadius.circular(6),
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                                      child: Text(
-                                        b['name']!,
-                                        style: TextStyle(
-                                          fontWeight: isLast ? FontWeight.bold : FontWeight.w500,
-                                          fontSize: isLast ? 20 : 18,
-                                          color: isLast ? Colors.grey[900] : const Color(0xFF4F46E5),
-                                        ),
-                                      ),
+                      // Breadcrumbs navigation or Section Title
+                      if (_breadcrumbs.length > 1 || _currentSection == FileSection.myDrive)
+                        Expanded(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              children: List.generate(_breadcrumbs.length, (index) {
+                                final b = _breadcrumbs[index];
+                                final isLast = index == _breadcrumbs.length - 1;
+                                return Row(
+                                  children: [
+                                    DragTarget<Map<String, dynamic>>(
+                                      onWillAcceptWithDetails: (details) {
+                                        final dragged = details.data;
+                                        return dragged['id'].toString() != b['id']?.toString() && _currentParentId != b['id'];
+                                      },
+                                      onAcceptWithDetails: (details) {
+                                        final dragged = details.data;
+                                        _moveItem(dragged['id'].toString(), dragged['name'] ?? '', b['id'], b['name']!);
+                                      },
+                                      builder: (context, candidateData, rejectedData) {
+                                        final isHovered = candidateData.isNotEmpty;
+                                        return AnimatedContainer(
+                                          duration: const Duration(milliseconds: 150),
+                                          decoration: isHovered
+                                              ? BoxDecoration(
+                                                  color: const Color(0xFF4F46E5).withOpacity(0.15),
+                                                  borderRadius: BorderRadius.circular(6),
+                                                  border: Border.all(color: const Color(0xFF4F46E5), width: 1.5),
+                                                )
+                                              : null,
+                                          child: InkWell(
+                                            onTap: () => _navigateToBreadcrumb(index),
+                                            borderRadius: BorderRadius.circular(6),
+                                            child: Padding(
+                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                              child: Text(
+                                                b['name']!,
+                                                style: TextStyle(
+                                                  fontWeight: isLast ? FontWeight.bold : FontWeight.w500,
+                                                  fontSize: isLast ? 20 : 18,
+                                                  color: isLast ? Colors.grey[900] : const Color(0xFF4F46E5),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        );
+                                      },
                                     ),
-                                  ),
-                                  if (!isLast)
-                                    Icon(Icons.chevron_right, size: 20, color: Colors.grey[400]),
-                                ],
-                              );
-                            }),
+                                    if (!isLast)
+                                      Icon(Icons.chevron_right, size: 20, color: Colors.grey[400]),
+                                  ],
+                                );
+                              }),
+                            ),
+                          ),
+                        )
+                      else
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _getSectionTitle(_currentSection),
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 22,
+                                  color: Colors.grey[900],
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                _getSectionSubtitle(_currentSection),
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ),
                       const SizedBox(width: 16),
                       // Actions
                       Row(
@@ -662,46 +1123,62 @@ class _HomeScreenState extends State<HomeScreen> {
                               _fetchUsage();
                             },
                           ),
-                          const SizedBox(width: 8),
-                          OutlinedButton.icon(
-                            onPressed: _isLoading || _isUploading ? null : _createFolderDialog,
-                            icon: const Icon(Icons.create_new_folder_outlined, size: 18),
-                            label: const Text('Nueva Carpeta'),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Colors.grey[800],
-                              side: BorderSide(color: Colors.grey[300]!),
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
+                          if (_currentSection == FileSection.myDrive) ...[
+                            const SizedBox(width: 8),
+                            OutlinedButton.icon(
+                              onPressed: _isLoading || _isUploading ? null : _createFolderDialog,
+                              icon: const Icon(Icons.create_new_folder_outlined, size: 18),
+                              label: const Text('Nueva Carpeta'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.grey[800],
+                                side: BorderSide(color: Colors.grey[300]!),
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 12),
-                          ElevatedButton.icon(
-                            onPressed: _isLoading || _isUploading ? null : _pickAndUploadFile,
-                            icon: _isUploading
-                                ? const SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                    ),
-                                  )
-                                : const Icon(Icons.cloud_upload_outlined, size: 18, color: Colors.white),
-                            label: Text(
-                              _isUploading ? 'Subiendo...' : 'Subir Archivo',
-                              style: const TextStyle(color: Colors.white),
-                            ),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF4F46E5),
-                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                              elevation: 0,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
+                            const SizedBox(width: 12),
+                            ElevatedButton.icon(
+                              onPressed: _isLoading || _isUploading ? null : _pickAndUploadFile,
+                              icon: _isUploading
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                      ),
+                                    )
+                                  : const Icon(Icons.cloud_upload_outlined, size: 18, color: Colors.white),
+                              label: Text(
+                                _isUploading ? 'Subiendo...' : 'Subir Archivo',
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF4F46E5),
+                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                                elevation: 0,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
                               ),
                             ),
-                          ),
+                          ] else if (_currentSection == FileSection.trash) ...[
+                            const SizedBox(width: 8),
+                            OutlinedButton.icon(
+                              onPressed: _isLoading || _items.isEmpty ? null : _emptyTrashDialog,
+                              icon: const Icon(Icons.delete_forever, size: 18, color: Colors.red),
+                              label: const Text('Vaciar Papelera', style: TextStyle(color: Colors.red)),
+                              style: OutlinedButton.styleFrom(
+                                side: BorderSide(color: Colors.red[300]!),
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ],
@@ -721,6 +1198,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildContent() {
+    if (_currentSection == FileSection.sync) {
+      return SyncScreen(token: widget.token, username: widget.username);
+    }
+
+    if (_currentSection == FileSection.hpc) {
+      return HpcScreen(token: widget.token, username: widget.username);
+    }
+
     if (_isLoading) {
       return const Center(
         child: Column(
@@ -768,11 +1253,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: Colors.grey[100],
                 shape: BoxShape.circle,
               ),
-              child: Icon(Icons.folder_open, size: 56, color: Colors.grey[400]),
+              child: Icon(_getSectionEmptyIcon(_currentSection), size: 56, color: Colors.grey[400]),
             ),
             const SizedBox(height: 20),
             Text(
-              'Esta carpeta está vacía',
+              _getSectionEmptyTitle(_currentSection),
               style: TextStyle(
                 color: Colors.grey[700],
                 fontWeight: FontWeight.w600,
@@ -781,7 +1266,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Crea una nueva carpeta o sube archivos para comenzar',
+              _getSectionEmptySubtitle(_currentSection),
               style: TextStyle(color: Colors.grey[500], fontSize: 14),
             ),
           ],
@@ -809,8 +1294,11 @@ class _HomeScreenState extends State<HomeScreen> {
             final name = item['name'] ?? 'Sin nombre';
             final size = item['size'];
             final mimeType = item['mimeType'];
+            final isOwner = _currentSection != FileSection.sharedWithMe &&
+                (item['ownerId'] == widget.username ||
+                    (item['ownerId'] == null && _currentSection == FileSection.myDrive));
 
-            return Card(
+            final cardWidget = Card(
               elevation: 0,
               color: Colors.white,
               shape: RoundedRectangleBorder(
@@ -820,6 +1308,28 @@ class _HomeScreenState extends State<HomeScreen> {
               child: InkWell(
                 borderRadius: BorderRadius.circular(12),
                 onTap: () {
+                  if (_currentSection == FileSection.trash) {
+                    showDialog(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        title: Text('Elemento en Papelera'),
+                        content: Text('"$name" está en la papelera. ¿Deseas restaurarlo?'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4F46E5), foregroundColor: Colors.white),
+                            onPressed: () {
+                              Navigator.pop(ctx);
+                              _restoreItem(id, name);
+                            },
+                            child: const Text('Restaurar'),
+                          ),
+                        ],
+                      ),
+                    );
+                    return;
+                  }
                   if (isFolder) {
                     _enterFolder(id, name);
                   } else {
@@ -846,7 +1356,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
                                 child: FutureBuilder<http.Response>(
                                   future: http.get(
-                                    Uri.parse('http://localhost:3000/api/files/files/$id/content'),
+                                    Uri.parse('${ApiConfig.streamingUrl}/api/files/files/$id/content'),
                                     headers: {'Authorization': 'Bearer ${widget.token}'},
                                   ),
                                   builder: (context, snapshot) {
@@ -857,7 +1367,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       return Image.memory(
                                         snapshot.data!.bodyBytes,
                                         fit: BoxFit.cover,
-                                        errorBuilder: (_, __, ___) => Icon(
+                                        errorBuilder: (context, error, stackTrace) => Icon(
                                           _getFileIcon(mimeType, name),
                                           size: 48,
                                           color: _getFileColor(mimeType, name),
@@ -884,9 +1394,35 @@ class _HomeScreenState extends State<HomeScreen> {
                                       : _getFileColor(mimeType, name),
                                 ),
                               ),
+                            // Star button in top-left
+                            if (_currentSection != FileSection.trash)
+                              Positioned(
+                                top: 6,
+                                left: 6,
+                                child: InkWell(
+                                  onTap: () => _toggleStar(id),
+                                  borderRadius: BorderRadius.circular(20),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(4),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.9),
+                                      shape: BoxShape.circle,
+                                      boxShadow: const [
+                                        BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))
+                                      ],
+                                    ),
+                                    child: Icon(
+                                      item['isStarred'] == true ? Icons.star : Icons.star_border,
+                                      size: 18,
+                                      color: item['isStarred'] == true ? Colors.amber[700] : Colors.grey[400],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            // Popup Menu in top-right
                             Positioned(
-                              top: 8,
-                              right: 8,
+                              top: 6,
+                              right: 6,
                               child: PopupMenuButton<String>(
                                 icon: Container(
                                   padding: const EdgeInsets.all(4),
@@ -897,7 +1433,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))
                                     ],
                                   ),
-                                  child: Icon(Icons.more_vert, size: 20, color: Colors.grey[800]),
+                                  child: Icon(Icons.more_vert, size: 18, color: Colors.grey[800]),
                                 ),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(8),
@@ -905,45 +1441,132 @@ class _HomeScreenState extends State<HomeScreen> {
                                 onSelected: (value) {
                                   if (value == 'download') {
                                     _downloadFile(id, name);
+                                  } else if (value == 'move') {
+                                    _showMoveDialog(item);
                                   } else if (value == 'delete') {
                                     _deleteItem(id, name, isFolder);
                                   } else if (value == 'share') {
                                     _shareItem(id, name);
+                                  } else if (value == 'star') {
+                                    _toggleStar(id);
+                                  } else if (value == 'restore') {
+                                    _restoreItem(id, name);
+                                  } else if (value == 'permanent_delete') {
+                                    _deletePermanently(id, name);
                                   }
                                 },
-                                itemBuilder: (context) => [
-                                  const PopupMenuItem(
-                                    value: 'share',
-                                    child: Row(
-                                      children: [
-                                        Icon(Icons.share_outlined, size: 18, color: Colors.blue),
-                                        SizedBox(width: 8),
-                                        Text('Compartir', style: TextStyle(color: Colors.blue)),
-                                      ],
-                                    ),
-                                  ),
-                                  if (!isFolder)
-                                    const PopupMenuItem(
-                                      value: 'download',
+                                itemBuilder: (context) {
+                                  if (_currentSection == FileSection.trash) {
+                                    return [
+                                      const PopupMenuItem(
+                                        value: 'restore',
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.restore, size: 18, color: Colors.green),
+                                            SizedBox(width: 8),
+                                            Text('Restaurar', style: TextStyle(color: Colors.green)),
+                                          ],
+                                        ),
+                                      ),
+                                      const PopupMenuItem(
+                                        value: 'permanent_delete',
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.delete_forever, size: 18, color: Colors.red),
+                                            SizedBox(width: 8),
+                                            Text('Eliminar definitivamente', style: TextStyle(color: Colors.red)),
+                                          ],
+                                        ),
+                                      ),
+                                    ];
+                                  }
+                                  if (!isOwner) {
+                                    return [
+                                      PopupMenuItem(
+                                        value: 'star',
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              item['isStarred'] == true ? Icons.star_outline : Icons.star,
+                                              size: 18,
+                                              color: Colors.amber[700],
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Text(item['isStarred'] == true ? 'Quitar de destacados' : 'Destacar'),
+                                          ],
+                                        ),
+                                      ),
+                                      if (!isFolder)
+                                        const PopupMenuItem(
+                                          value: 'download',
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.download, size: 18),
+                                              SizedBox(width: 8),
+                                              Text('Descargar'),
+                                            ],
+                                          ),
+                                        ),
+                                    ];
+                                  }
+                                  return [
+                                    PopupMenuItem(
+                                      value: 'star',
                                       child: Row(
                                         children: [
-                                          Icon(Icons.download, size: 18),
-                                          SizedBox(width: 8),
-                                          Text('Descargar'),
+                                          Icon(
+                                            item['isStarred'] == true ? Icons.star_outline : Icons.star,
+                                            size: 18,
+                                            color: Colors.amber[700],
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Text(item['isStarred'] == true ? 'Quitar de destacados' : 'Destacar'),
                                         ],
                                       ),
                                     ),
-                                  const PopupMenuItem(
-                                    value: 'delete',
-                                    child: Row(
-                                      children: [
-                                        Icon(Icons.delete_outline, size: 18, color: Colors.red),
-                                        SizedBox(width: 8),
-                                        Text('Eliminar', style: TextStyle(color: Colors.red)),
-                                      ],
+                                    const PopupMenuItem(
+                                      value: 'share',
+                                      child: Row(
+                                        children: [
+                                          Icon(Icons.share_outlined, size: 18, color: Colors.blue),
+                                          SizedBox(width: 8),
+                                          Text('Compartir', style: TextStyle(color: Colors.blue)),
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                                ],
+                                    if (!isFolder)
+                                      const PopupMenuItem(
+                                        value: 'download',
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.download, size: 18),
+                                            SizedBox(width: 8),
+                                            Text('Descargar'),
+                                          ],
+                                        ),
+                                      ),
+                                    const PopupMenuItem(
+                                      value: 'move',
+                                      child: Row(
+                                        children: [
+                                          Icon(Icons.drive_file_move_outlined, size: 18, color: Color(0xFF4F46E5)),
+                                          SizedBox(width: 8),
+                                          Text('Mover...', style: TextStyle(color: Color(0xFF4F46E5))),
+                                        ],
+                                      ),
+                                    ),
+                                    const PopupMenuItem(
+                                      value: 'delete',
+                                      child: Row(
+                                        children: [
+                                          Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                                          SizedBox(width: 8),
+                                          Text('Mover a papelera', style: TextStyle(color: Colors.red)),
+                                        ],
+                                      ),
+                                    ),
+                                  ];
+                                },
                               ),
                             ),
                           ],
@@ -967,12 +1590,49 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                           const SizedBox(height: 4),
-                          Text(
-                            isFolder ? 'Carpeta' : (size != null ? _formatBytes(size) : 'Archivo'),
-                            style: TextStyle(
-                              color: Colors.grey[500],
-                              fontSize: 12,
-                            ),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                isFolder ? 'Carpeta' : (size != null ? _formatBytes(size) : 'Archivo'),
+                                style: TextStyle(
+                                  color: Colors.grey[500],
+                                  fontSize: 12,
+                                ),
+                              ),
+                              if (item['ownerId'] != null && item['ownerId'] != widget.username)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFEEF2FF),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    'De: ${item['ownerId']}',
+                                    style: const TextStyle(
+                                      fontSize: 10,
+                                      color: Color(0xFF4F46E5),
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                )
+                              else if (_currentSection == FileSection.trash)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.red[50],
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    'Papelera',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      color: Colors.red[700],
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
                         ],
                       ),
@@ -981,13 +1641,93 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             );
+
+            Widget finalCardWidget = cardWidget;
+
+            if (isFolder && isOwner && _currentSection != FileSection.trash) {
+              finalCardWidget = DragTarget<Map<String, dynamic>>(
+                onWillAcceptWithDetails: (details) {
+                  final dragged = details.data;
+                  return dragged['id'].toString() != id;
+                },
+                onAcceptWithDetails: (details) {
+                  final dragged = details.data;
+                  _moveItem(dragged['id'].toString(), dragged['name'] ?? '', id, name);
+                },
+                builder: (context, candidateData, rejectedData) {
+                  final isHovered = candidateData.isNotEmpty;
+                  return AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    decoration: isHovered
+                        ? BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFF4F46E5), width: 2.5),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF4F46E5).withOpacity(0.35),
+                                blurRadius: 10,
+                                spreadRadius: 2,
+                              ),
+                            ],
+                          )
+                        : null,
+                    child: cardWidget,
+                  );
+                },
+              );
+            }
+
+            if (isOwner && _currentSection != FileSection.trash) {
+              return Draggable<Map<String, dynamic>>(
+                data: item,
+                feedback: Material(
+                  color: Colors.transparent,
+                  elevation: 8,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    width: 170,
+                    height: 110,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E293B).withOpacity(0.92),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFF818CF8), width: 2),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          isFolder ? Icons.folder : _getFileIcon(mimeType, name),
+                          size: 36,
+                          color: const Color(0xFF818CF8),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                childWhenDragging: Opacity(
+                  opacity: 0.3,
+                  child: finalCardWidget,
+                ),
+                child: finalCardWidget,
+              );
+            }
+
+            return finalCardWidget;
           },
         );
       },
     );
   }
 
-  Widget _buildSidebarItem(IconData icon, String title, bool isSelected) {
+  Widget _buildSidebarItem(IconData icon, String title, bool isSelected, VoidCallback onTap) {
     return Container(
       margin: const EdgeInsets.only(bottom: 4),
       decoration: BoxDecoration(
@@ -1009,8 +1749,219 @@ class _HomeScreenState extends State<HomeScreen> {
             fontSize: 14,
           ),
         ),
-        onTap: () {},
+        onTap: onTap,
       ),
+    );
+  }
+}
+
+class MoveFileDialog extends StatefulWidget {
+  final Map<String, dynamic> item;
+  final String token;
+  final void Function(String? targetParentId, String targetFolderName) onMoved;
+
+  const MoveFileDialog({
+    super.key,
+    required this.item,
+    required this.token,
+    required this.onMoved,
+  });
+
+  @override
+  State<MoveFileDialog> createState() => _MoveFileDialogState();
+}
+
+class _MoveFileDialogState extends State<MoveFileDialog> {
+  bool _isLoading = true;
+  List<Map<String, dynamic>> _folders = [];
+  final List<Map<String, String?>> _folderStack = [
+    {'id': null, 'name': 'Mi Unidad'}
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchFolders();
+  }
+
+  String? get _currentBrowseId => _folderStack.last['id'];
+  String get _currentBrowseName => _folderStack.last['name']!;
+
+  Future<void> _fetchFolders() async {
+    setState(() => _isLoading = true);
+    try {
+      String url = '${ApiConfig.streamingUrl}/api/files';
+      if (_currentBrowseId != null) {
+        url += '?parentId=${Uri.encodeComponent(_currentBrowseId!)}';
+      }
+
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {'Authorization': 'Bearer ${widget.token}'},
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final List<dynamic> items = data['items'] ?? [];
+        final movingItemId = widget.item['id'].toString();
+
+        setState(() {
+          _folders = items
+              .where((i) => i['kind'] == 'folder' && i['id'].toString() != movingItemId)
+              .map((i) => Map<String, dynamic>.from(i))
+              .toList();
+        });
+      }
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _enterFolder(String id, String name) {
+    setState(() {
+      _folderStack.add({'id': id, 'name': name});
+    });
+    _fetchFolders();
+  }
+
+  void _goUp() {
+    if (_folderStack.length <= 1) return;
+    setState(() {
+      _folderStack.removeLast();
+    });
+    _fetchFolders();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentParentOfItem = widget.item['parentId'];
+    final isAlreadyHere = _currentBrowseId == currentParentOfItem;
+
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Row(
+        children: [
+          const Icon(Icons.drive_file_move_outlined, color: Color(0xFF4F46E5)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Mover "${widget.item['name']}"',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 460,
+        height: 380,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Current Location Path
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.folder_open, size: 18, color: Color(0xFF64748B)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _folderStack.map((f) => f['name']).join(' > '),
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF334155)),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (_folderStack.length > 1)
+                    IconButton(
+                      icon: const Icon(Icons.arrow_upward, size: 18, color: Color(0xFF4F46E5)),
+                      tooltip: 'Subir un nivel',
+                      onPressed: _isLoading ? null : _goUp,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Selecciona la carpeta de destino:',
+              style: TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.w500),
+            ),
+            const SizedBox(height: 6),
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey[200]!),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: _isLoading
+                    ? const Center(child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF4F46E5)))
+                    : _folders.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.folder_off_outlined, size: 36, color: Colors.grey[400]),
+                                const SizedBox(height: 6),
+                                Text(
+                                  'No hay más carpetas en esta ubicación',
+                                  style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView.separated(
+                            itemCount: _folders.length,
+                            separatorBuilder: (context, index) => Divider(height: 1, color: Colors.grey[100]),
+                            itemBuilder: (context, index) {
+                              final f = _folders[index];
+                              return ListTile(
+                                leading: const Icon(Icons.folder, color: Color(0xFF4F46E5), size: 22),
+                                title: Text(f['name'], style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                                trailing: const Icon(Icons.chevron_right, size: 18, color: Colors.grey),
+                                dense: true,
+                                onTap: () => _enterFolder(f['id'].toString(), f['name']),
+                              );
+                            },
+                          ),
+              ),
+            ),
+            if (isAlreadyHere) ...[
+              const SizedBox(height: 8),
+              Text(
+                'El elemento ya se encuentra en esta ubicación.',
+                style: TextStyle(fontSize: 11, color: Colors.amber[800], fontStyle: FontStyle.italic),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF4F46E5),
+            foregroundColor: Colors.white,
+            disabledBackgroundColor: Colors.grey[300],
+          ),
+          onPressed: isAlreadyHere
+              ? null
+              : () {
+                  Navigator.pop(context);
+                  widget.onMoved(_currentBrowseId, _currentBrowseName);
+                },
+          child: Text(isAlreadyHere ? 'Ubicación actual' : 'Mover aquí'),
+        ),
+      ],
     );
   }
 }
