@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'ui/screens/login_screen.dart';
 import 'ui/screens/public_view_screen.dart';
 
@@ -31,7 +30,7 @@ class FyleSyncApp extends StatelessWidget {
           seedColor: const Color(0xFF0F172A),
           brightness: Brightness.dark,
         ),
-        fontFamily: GoogleFonts.inter().fontFamily,
+        fontFamily: 'Segoe UI',
       ),
       home: shareId != null && shareId.isNotEmpty
           ? PublicViewScreen(fileId: shareId)

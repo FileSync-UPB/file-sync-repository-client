@@ -1,10 +1,28 @@
+import 'package:flutter/foundation.dart';
+
 class ApiConfig {
-  static String get host {
-    final h = Uri.base.host;
-    if (h.isNotEmpty && h != '0.0.0.0') {
-      return h;
+  static const String defaultLanHost = '192.168.1.2';
+  static String? customHost;
+
+  static void setHost(String newHost) {
+    if (newHost.trim().isNotEmpty) {
+      customHost = newHost.trim();
     }
-    return 'localhost';
+  }
+
+  static String get host {
+    if (customHost != null && customHost!.isNotEmpty) {
+      return customHost!;
+    }
+    if (kIsWeb) {
+      try {
+        final h = Uri.base.host;
+        if (h.isNotEmpty && h != '0.0.0.0') {
+          return h;
+        }
+      } catch (_) {}
+    }
+    return defaultLanHost;
   }
 
   static String get streamingUrl => 'http://$host:3000';
@@ -12,4 +30,5 @@ class ApiConfig {
   static String get webUrl => 'http://$host:5000';
   static String get hpcUrl => 'http://$host:8081';
 }
+
 

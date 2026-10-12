@@ -396,7 +396,7 @@ class _ShareDialogInnerState extends State<ShareDialogInner> {
                                   Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                     decoration: BoxDecoration(
-                                      color: _isPublicActive ? Colors.green[900]!.withOpacity(0.4) : Colors.grey[800],
+                                      color: _isPublicActive ? Colors.green[900]!.withValues(alpha: 0.4) : Colors.grey[800],
                                       borderRadius: BorderRadius.circular(4),
                                     ),
                                     child: Text(

@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'preview_screen.dart';
@@ -7,6 +6,7 @@ import 'share_dialog_inner.dart';
 import 'sync_screen.dart';
 import 'hpc_screen.dart';
 import '../../config/api_config.dart';
+import '../../platform/platform_utils.dart';
 
 enum FileSection {
   myDrive,
@@ -263,82 +263,70 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _pickAndUploadFile() {
-    final uploadInput = html.FileUploadInputElement();
-    uploadInput.click();
+    pickFileWeb(
+      onFileSelected: (name, size, bytes) async {
+        setState(() {
+          _isUploading = true;
+        });
 
-    uploadInput.onChange.listen((e) async {
-      final files = uploadInput.files;
-      if (files == null || files.isEmpty) return;
+        try {
+          final uri = Uri.parse('${ApiConfig.streamingUrl}/api/files/upload');
+          final request = http.MultipartRequest('POST', uri);
+          request.headers['Authorization'] = 'Bearer ${widget.token}';
 
-      final html.File file = files.first;
-
-      setState(() {
-        _isUploading = true;
-      });
-
-      try {
-        final reader = html.FileReader();
-        reader.readAsArrayBuffer(file);
-        
-        await reader.onLoad.first;
-        final bytes = reader.result as List<int>;
-
-        final uri = Uri.parse('${ApiConfig.streamingUrl}/api/files/upload');
-        final request = http.MultipartRequest('POST', uri);
-        request.headers['Authorization'] = 'Bearer ${widget.token}';
-
-        if (_currentParentId != null) {
-          request.fields['parentId'] = _currentParentId!;
-        }
-
-        final multipartFile = http.MultipartFile.fromBytes(
-          'file',
-          bytes,
-          filename: file.name,
-        );
-        request.files.add(multipartFile);
-
-        final streamedResponse = await request.send();
-        final response = await http.Response.fromStream(streamedResponse);
-
-        if (response.statusCode == 201) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Archivo "${file.name}" subido con éxito.'),
-                backgroundColor: Colors.green[700],
-              ),
-            );
+          if (_currentParentId != null) {
+            request.fields['parentId'] = _currentParentId!;
           }
-          _fetchFiles();
-          _fetchUsage();
-        } else {
+
+          final multipartFile = http.MultipartFile.fromBytes(
+            'file',
+            bytes,
+            filename: name,
+          );
+          request.files.add(multipartFile);
+
+          final streamedResponse = await request.send();
+          final response = await http.Response.fromStream(streamedResponse);
+
+          if (response.statusCode == 201) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Archivo "$name" subido con éxito.'),
+                  backgroundColor: Colors.green[700],
+                ),
+              );
+            }
+            _fetchFiles();
+            _fetchUsage();
+          } else {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Error al subir (${response.statusCode}): ${response.body}'),
+                  backgroundColor: Colors.red[700],
+                ),
+              );
+            }
+          }
+        } catch (e) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Error al subir (${response.statusCode}): ${response.body}'),
+                content: Text('Error de subida: $e'),
                 backgroundColor: Colors.red[700],
               ),
             );
           }
+        } finally {
+          if (mounted) {
+            setState(() {
+              _isUploading = false;
+            });
+          }
         }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error de subida: $e'),
-              backgroundColor: Colors.red[700],
-            ),
-          );
-        }
-      } finally {
-        if (mounted) {
-          setState(() {
-            _isUploading = false;
-          });
-        }
-      }
-    });
+      },
+    );
   }
 
   Future<void> _deleteItem(String id, String name, bool isFolder) async {
@@ -411,9 +399,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _downloadFile(String id, String name) {
     final downloadUrl =
         '${ApiConfig.streamingUrl}/api/files/files/$id/content?token=${Uri.encodeComponent(widget.token)}';
-    html.AnchorElement(href: downloadUrl)
-      ..setAttribute('download', name)
-      ..click();
+    openUrlOrDownload(downloadUrl, downloadName: name);
   }
 
   void _previewFile(String id, String name, String? mimeType) {
@@ -834,6 +820,23 @@ class _HomeScreenState extends State<HomeScreen> {
         (mimeType?.startsWith('image/') ?? false);
   }
 
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  int _getBottomNavIndex(FileSection section) {
+    switch (section) {
+      case FileSection.myDrive:
+        return 0;
+      case FileSection.sharedWithMe:
+        return 1;
+      case FileSection.sync:
+        return 2;
+      case FileSection.hpc:
+        return 3;
+      default:
+        return 4;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final usedFormatted = _formatBytes(_usedBytes);
@@ -841,66 +844,125 @@ class _HomeScreenState extends State<HomeScreen> {
     final progress = _limitBytes > 0
         ? (_usedBytes / _limitBytes).clamp(0.0, 1.0)
         : 0.0;
+    final isMobile = MediaQuery.of(context).size.width < 800;
 
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: const Color(0xFFF8FAFC),
+      drawer: isMobile
+          ? Drawer(
+              backgroundColor: Colors.white,
+              child: SafeArea(
+                child: _buildNavigationList(
+                  progress: progress,
+                  usedFormatted: usedFormatted,
+                  limitFormatted: limitFormatted,
+                  isDrawer: true,
+                ),
+              ),
+            )
+          : null,
+      bottomNavigationBar: isMobile
+          ? BottomNavigationBar(
+              currentIndex: _getBottomNavIndex(_currentSection),
+              onTap: (index) {
+                if (index == 0) _switchSection(FileSection.myDrive);
+                if (index == 1) _switchSection(FileSection.sharedWithMe);
+                if (index == 2) _switchSection(FileSection.sync);
+                if (index == 3) _switchSection(FileSection.hpc);
+                if (index == 4) _scaffoldKey.currentState?.openDrawer();
+              },
+              selectedItemColor: const Color(0xFF4F46E5),
+              unselectedItemColor: Colors.grey[500],
+              type: BottomNavigationBarType.fixed,
+              backgroundColor: Colors.white,
+              elevation: 8,
+              items: const [
+                BottomNavigationBarItem(icon: Icon(Icons.folder), label: 'Archivos'),
+                BottomNavigationBarItem(icon: Icon(Icons.group_outlined), label: 'Compartidos'),
+                BottomNavigationBarItem(icon: Icon(Icons.sync_alt), label: 'Sync'),
+                BottomNavigationBarItem(icon: Icon(Icons.rocket_launch_rounded), label: 'Cómputo'),
+                BottomNavigationBarItem(icon: Icon(Icons.menu), label: 'Más'),
+              ],
+            )
+          : null,
       appBar: AppBar(
         elevation: 1,
         backgroundColor: Colors.white,
+        leading: isMobile
+            ? IconButton(
+                icon: const Icon(Icons.menu, color: Color(0xFF1E293B)),
+                onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+              )
+            : null,
         title: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
                 color: const Color(0xFFEEF2FF),
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(8),
               ),
-              child: const Icon(Icons.cloud, color: Color(0xFF4F46E5), size: 24),
+              child: const Icon(Icons.cloud, color: Color(0xFF4F46E5), size: 20),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 8),
             Text(
               'FileSync',
               style: TextStyle(
                 color: Colors.grey[900],
                 fontWeight: FontWeight.bold,
-                fontSize: 20,
+                fontSize: 18,
               ),
             ),
           ],
         ),
         actions: [
-          Center(
-            child: Container(
-              margin: const EdgeInsets.only(right: 12),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.grey[300]!),
+          if (!isMobile)
+            Center(
+              child: Container(
+                margin: const EdgeInsets.only(right: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.grey[300]!),
+                ),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 12,
+                      backgroundColor: const Color(0xFF4F46E5),
+                      child: Text(
+                        widget.username.isNotEmpty ? widget.username[0].toUpperCase() : 'U',
+                        style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      widget.username,
+                      style: TextStyle(
+                        color: Colors.grey[800],
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 12,
-                    backgroundColor: const Color(0xFF4F46E5),
-                    child: Text(
-                      widget.username.isNotEmpty ? widget.username[0].toUpperCase() : 'U',
-                      style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    widget.username,
-                    style: TextStyle(
-                      color: Colors.grey[800],
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: CircleAvatar(
+                radius: 14,
+                backgroundColor: const Color(0xFF4F46E5),
+                child: Text(
+                  widget.username.isNotEmpty ? widget.username[0].toUpperCase() : 'U',
+                  style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold),
+                ),
               ),
             ),
-          ),
           IconButton(
             tooltip: 'Cerrar Sesión',
             icon: Icon(Icons.logout, color: Colors.grey[600]),
@@ -908,292 +970,224 @@ class _HomeScreenState extends State<HomeScreen> {
               Navigator.of(context).pushReplacementNamed('/');
             },
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
         ],
       ),
-      body: Row(
-        children: [
-          // Sidebar
-          Container(
-            width: 260,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border(right: BorderSide(color: Colors.grey[200]!)),
-            ),
-            padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      body: isMobile
+          ? _buildMainWorkspace(isMobile)
+          : Row(
               children: [
-                _buildSidebarItem(
-                  Icons.storage,
-                  'Mi Unidad',
-                  _currentSection == FileSection.myDrive,
-                  () => _switchSection(FileSection.myDrive),
-                ),
-                _buildSidebarItem(
-                  Icons.group_outlined,
-                  'Compartidos conmigo',
-                  _currentSection == FileSection.sharedWithMe,
-                  () => _switchSection(FileSection.sharedWithMe),
-                ),
-                _buildSidebarItem(
-                  Icons.access_time,
-                  'Recientes',
-                  _currentSection == FileSection.recent,
-                  () => _switchSection(FileSection.recent),
-                ),
-                _buildSidebarItem(
-                  Icons.star_outline,
-                  'Destacados',
-                  _currentSection == FileSection.starred,
-                  () => _switchSection(FileSection.starred),
-                ),
-                _buildSidebarItem(
-                  Icons.delete_outline,
-                  'Papelera',
-                  _currentSection == FileSection.trash,
-                  () => _switchSection(FileSection.trash),
-                ),
-                const SizedBox(height: 8),
-                const Divider(height: 1, color: Color(0xFFE2E8F0)),
-                const SizedBox(height: 8),
-                _buildSidebarItem(
-                  Icons.sync_alt,
-                  'Sincronización (Sync)',
-                  _currentSection == FileSection.sync,
-                  () => _switchSection(FileSection.sync),
-                ),
-                _buildSidebarItem(
-                  Icons.rocket_launch_rounded,
-                  'Computación de Alto Rendimiento',
-                  _currentSection == FileSection.hpc,
-                  () => _switchSection(FileSection.hpc),
-                ),
-                const Spacer(),
-                // Storage Bar
+                // Sidebar Escritorio
                 Container(
-                  padding: const EdgeInsets.all(16),
+                  width: 260,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey[200]!),
+                    color: Colors.white,
+                    border: Border(right: BorderSide(color: Colors.grey[200]!)),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.cloud_sync, size: 18, color: Colors.grey[700]),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Almacenamiento',
-                            style: TextStyle(
-                              color: Colors.grey[800],
-                              fontWeight: FontWeight.w600,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(6),
-                        child: LinearProgressIndicator(
-                          value: progress,
-                          minHeight: 6,
-                          backgroundColor: Colors.grey[200],
-                          valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF4F46E5)),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '$usedFormatted de $limitFormatted usados',
-                        style: TextStyle(
-                          color: Colors.grey[600],
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
+                  padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                  child: _buildNavigationList(
+                    progress: progress,
+                    usedFormatted: usedFormatted,
+                    limitFormatted: limitFormatted,
+                    isDrawer: false,
                   ),
+                ),
+                // Workspace Escritorio
+                Expanded(
+                  child: _buildMainWorkspace(isMobile),
                 ),
               ],
             ),
-          ),
-          // Main Workspace
+    );
+  }
+
+  Widget _buildMainWorkspace(bool isMobile) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: isMobile ? 12 : 32,
+        vertical: isMobile ? 12 : 24,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header & Action Buttons
+          if (isMobile)
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildBreadcrumbsOrTitle(),
+                const SizedBox(height: 12),
+                _buildActionButtons(isMobile),
+              ],
+            )
+          else
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(child: _buildBreadcrumbsOrTitle()),
+                const SizedBox(width: 16),
+                _buildActionButtons(isMobile),
+              ],
+            ),
+          SizedBox(height: isMobile ? 12 : 24),
+          // Content grid / list
           Expanded(
-            child: Container(
-              padding: const EdgeInsets.all(32),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Header & Action Buttons
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      // Breadcrumbs navigation or Section Title
-                      if (_breadcrumbs.length > 1 || _currentSection == FileSection.myDrive)
-                        Expanded(
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: Row(
-                              children: List.generate(_breadcrumbs.length, (index) {
-                                final b = _breadcrumbs[index];
-                                final isLast = index == _breadcrumbs.length - 1;
-                                return Row(
-                                  children: [
-                                    DragTarget<Map<String, dynamic>>(
-                                      onWillAcceptWithDetails: (details) {
-                                        final dragged = details.data;
-                                        return dragged['id'].toString() != b['id']?.toString() && _currentParentId != b['id'];
-                                      },
-                                      onAcceptWithDetails: (details) {
-                                        final dragged = details.data;
-                                        _moveItem(dragged['id'].toString(), dragged['name'] ?? '', b['id'], b['name']!);
-                                      },
-                                      builder: (context, candidateData, rejectedData) {
-                                        final isHovered = candidateData.isNotEmpty;
-                                        return AnimatedContainer(
-                                          duration: const Duration(milliseconds: 150),
-                                          decoration: isHovered
-                                              ? BoxDecoration(
-                                                  color: const Color(0xFF4F46E5).withOpacity(0.15),
-                                                  borderRadius: BorderRadius.circular(6),
-                                                  border: Border.all(color: const Color(0xFF4F46E5), width: 1.5),
-                                                )
-                                              : null,
-                                          child: InkWell(
-                                            onTap: () => _navigateToBreadcrumb(index),
-                                            borderRadius: BorderRadius.circular(6),
-                                            child: Padding(
-                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                                              child: Text(
-                                                b['name']!,
-                                                style: TextStyle(
-                                                  fontWeight: isLast ? FontWeight.bold : FontWeight.w500,
-                                                  fontSize: isLast ? 20 : 18,
-                                                  color: isLast ? Colors.grey[900] : const Color(0xFF4F46E5),
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                    if (!isLast)
-                                      Icon(Icons.chevron_right, size: 20, color: Colors.grey[400]),
-                                  ],
-                                );
-                              }),
+            child: _buildContent(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBreadcrumbsOrTitle() {
+    if (_breadcrumbs.length > 1 || _currentSection == FileSection.myDrive) {
+      return SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: List.generate(_breadcrumbs.length, (index) {
+            final b = _breadcrumbs[index];
+            final isLast = index == _breadcrumbs.length - 1;
+            return Row(
+              children: [
+                DragTarget<Map<String, dynamic>>(
+                  onWillAcceptWithDetails: (details) {
+                    final dragged = details.data;
+                    return dragged['id'].toString() != b['id']?.toString() && _currentParentId != b['id'];
+                  },
+                  onAcceptWithDetails: (details) {
+                    final dragged = details.data;
+                    _moveItem(dragged['id'].toString(), dragged['name'] ?? '', b['id'], b['name']!);
+                  },
+                  builder: (context, candidateData, rejectedData) {
+                    final isHovered = candidateData.isNotEmpty;
+                    return AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      decoration: isHovered
+                          ? BoxDecoration(
+                              color: const Color(0xFF4F46E5).withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: const Color(0xFF4F46E5), width: 1.5),
+                            )
+                          : null,
+                      child: InkWell(
+                        onTap: () => _navigateToBreadcrumb(index),
+                        borderRadius: BorderRadius.circular(6),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                          child: Text(
+                            b['name']!,
+                            style: TextStyle(
+                              fontWeight: isLast ? FontWeight.bold : FontWeight.w500,
+                              fontSize: isLast ? 18 : 16,
+                              color: isLast ? Colors.grey[900] : const Color(0xFF4F46E5),
                             ),
-                          ),
-                        )
-                      else
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _getSectionTitle(_currentSection),
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 22,
-                                  color: Colors.grey[900],
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                _getSectionSubtitle(_currentSection),
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: Colors.grey[600],
-                                ),
-                              ),
-                            ],
                           ),
                         ),
-                      const SizedBox(width: 16),
-                      // Actions
-                      Row(
-                        children: [
-                          IconButton(
-                            tooltip: 'Actualizar',
-                            icon: const Icon(Icons.refresh, color: Colors.grey),
-                            onPressed: _isLoading ? null : () {
-                              _fetchFiles();
-                              _fetchUsage();
-                            },
-                          ),
-                          if (_currentSection == FileSection.myDrive) ...[
-                            const SizedBox(width: 8),
-                            OutlinedButton.icon(
-                              onPressed: _isLoading || _isUploading ? null : _createFolderDialog,
-                              icon: const Icon(Icons.create_new_folder_outlined, size: 18),
-                              label: const Text('Nueva Carpeta'),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: Colors.grey[800],
-                                side: BorderSide(color: Colors.grey[300]!),
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            ElevatedButton.icon(
-                              onPressed: _isLoading || _isUploading ? null : _pickAndUploadFile,
-                              icon: _isUploading
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                      ),
-                                    )
-                                  : const Icon(Icons.cloud_upload_outlined, size: 18, color: Colors.white),
-                              label: Text(
-                                _isUploading ? 'Subiendo...' : 'Subir Archivo',
-                                style: const TextStyle(color: Colors.white),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF4F46E5),
-                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                              ),
-                            ),
-                          ] else if (_currentSection == FileSection.trash) ...[
-                            const SizedBox(width: 8),
-                            OutlinedButton.icon(
-                              onPressed: _isLoading || _items.isEmpty ? null : _emptyTrashDialog,
-                              icon: const Icon(Icons.delete_forever, size: 18, color: Colors.red),
-                              label: const Text('Vaciar Papelera', style: TextStyle(color: Colors.red)),
-                              style: OutlinedButton.styleFrom(
-                                side: BorderSide(color: Colors.red[300]!),
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  // Content grid / list
-                  Expanded(
-                    child: _buildContent(),
-                  ),
-                ],
+                    );
+                  },
+                ),
+                if (!isLast)
+                  Icon(Icons.chevron_right, size: 18, color: Colors.grey[400]),
+              ],
+            );
+          }),
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          _getSectionTitle(_currentSection),
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 20,
+            color: Colors.grey[900],
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          _getSectionSubtitle(_currentSection),
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey[600],
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActionButtons(bool isMobile) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        IconButton(
+          tooltip: 'Actualizar',
+          icon: const Icon(Icons.refresh, color: Colors.grey),
+          onPressed: _isLoading ? null : () {
+            _fetchFiles();
+            _fetchUsage();
+          },
+        ),
+        if (_currentSection == FileSection.myDrive) ...[
+          OutlinedButton.icon(
+            onPressed: _isLoading || _isUploading ? null : _createFolderDialog,
+            icon: const Icon(Icons.create_new_folder_outlined, size: 16),
+            label: const Text('Carpeta'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.grey[800],
+              side: BorderSide(color: Colors.grey[300]!),
+              padding: EdgeInsets.symmetric(horizontal: isMobile ? 10 : 16, vertical: isMobile ? 8 : 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+          ElevatedButton.icon(
+            onPressed: _isLoading || _isUploading ? null : _pickAndUploadFile,
+            icon: _isUploading
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  )
+                : const Icon(Icons.cloud_upload_outlined, size: 16, color: Colors.white),
+            label: Text(
+              _isUploading ? 'Subiendo...' : 'Subir',
+              style: const TextStyle(color: Colors.white),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF4F46E5),
+              padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 18, vertical: isMobile ? 8 : 12),
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+        ] else if (_currentSection == FileSection.trash) ...[
+          OutlinedButton.icon(
+            onPressed: _isLoading || _items.isEmpty ? null : _emptyTrashDialog,
+            icon: const Icon(Icons.delete_forever, size: 16, color: Colors.red),
+            label: const Text('Vaciar Papelera', style: TextStyle(color: Colors.red)),
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: Colors.red[300]!),
+              padding: EdgeInsets.symmetric(horizontal: isMobile ? 10 : 16, vertical: isMobile ? 8 : 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
               ),
             ),
           ),
         ],
-      ),
+      ],
     );
   }
 
@@ -1276,15 +1270,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Compute columns based on width
-        int crossAxisCount = (constraints.maxWidth / 220).floor().clamp(2, 6);
+        final isNarrow = constraints.maxWidth < 600;
+        int crossAxisCount = isNarrow ? 2 : (constraints.maxWidth / 220).floor().clamp(2, 6);
+        double childAspectRatio = isNarrow ? 0.86 : 1.1;
 
         return GridView.builder(
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: crossAxisCount,
-            childAspectRatio: 1.1,
-            crossAxisSpacing: 16,
-            mainAxisSpacing: 16,
+            childAspectRatio: childAspectRatio,
+            crossAxisSpacing: isNarrow ? 10 : 16,
+            mainAxisSpacing: isNarrow ? 10 : 16,
           ),
           itemCount: _items.length,
           itemBuilder: (context, index) {
@@ -1388,7 +1383,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               Center(
                                 child: Icon(
                                   isFolder ? Icons.folder : _getFileIcon(mimeType, name),
-                                  size: 64,
+                                  size: isNarrow ? 46 : 64,
                                   color: isFolder
                                       ? const Color(0xFF4F46E5)
                                       : _getFileColor(mimeType, name),
@@ -1575,7 +1570,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     // Details Area
                     Padding(
-                      padding: const EdgeInsets.all(12.0),
+                      padding: EdgeInsets.all(isNarrow ? 8.0 : 12.0),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -1586,10 +1581,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             style: TextStyle(
                               color: Colors.grey[900],
                               fontWeight: FontWeight.w600,
-                              fontSize: 14,
+                              fontSize: isNarrow ? 12 : 14,
                             ),
                           ),
-                          const SizedBox(height: 4),
+                          const SizedBox(height: 2),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
@@ -1597,7 +1592,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 isFolder ? 'Carpeta' : (size != null ? _formatBytes(size) : 'Archivo'),
                                 style: TextStyle(
                                   color: Colors.grey[500],
-                                  fontSize: 12,
+                                  fontSize: isNarrow ? 10 : 12,
                                 ),
                               ),
                               if (item['ownerId'] != null && item['ownerId'] != widget.username)
@@ -1727,7 +1722,13 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildSidebarItem(IconData icon, String title, bool isSelected, VoidCallback onTap) {
+  Widget _buildSidebarItem(
+    IconData icon,
+    String title,
+    bool isSelected,
+    VoidCallback onTap, {
+    bool isDrawer = false,
+  }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 4),
       decoration: BoxDecoration(
@@ -1749,8 +1750,132 @@ class _HomeScreenState extends State<HomeScreen> {
             fontSize: 14,
           ),
         ),
-        onTap: onTap,
+        onTap: () {
+          if (isDrawer && mounted) {
+            Navigator.of(context).pop();
+          }
+          onTap();
+        },
       ),
+    );
+  }
+
+  Widget _buildNavigationList({
+    required double progress,
+    required String usedFormatted,
+    required String limitFormatted,
+    bool isDrawer = false,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (isDrawer) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+            decoration: const BoxDecoration(
+              color: Color(0xFF1E1B4B),
+            ),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 20,
+                  backgroundColor: const Color(0xFF4F46E5),
+                  child: Text(
+                    widget.username.isNotEmpty ? widget.username[0].toUpperCase() : 'U',
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.username,
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      const Text(
+                        'FileSync Enterprise',
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: isDrawer ? 12 : 0),
+          child: Column(
+            children: [
+              _buildSidebarItem(Icons.storage, 'Mi Unidad', _currentSection == FileSection.myDrive, () => _switchSection(FileSection.myDrive), isDrawer: isDrawer),
+              _buildSidebarItem(Icons.group_outlined, 'Compartidos conmigo', _currentSection == FileSection.sharedWithMe, () => _switchSection(FileSection.sharedWithMe), isDrawer: isDrawer),
+              _buildSidebarItem(Icons.access_time, 'Recientes', _currentSection == FileSection.recent, () => _switchSection(FileSection.recent), isDrawer: isDrawer),
+              _buildSidebarItem(Icons.star_outline, 'Destacados', _currentSection == FileSection.starred, () => _switchSection(FileSection.starred), isDrawer: isDrawer),
+              _buildSidebarItem(Icons.delete_outline, 'Papelera', _currentSection == FileSection.trash, () => _switchSection(FileSection.trash), isDrawer: isDrawer),
+              const SizedBox(height: 8),
+              const Divider(height: 1, color: Color(0xFFE2E8F0)),
+              const SizedBox(height: 8),
+              _buildSidebarItem(Icons.sync_alt, 'Sincronización (Sync)', _currentSection == FileSection.sync, () => _switchSection(FileSection.sync), isDrawer: isDrawer),
+              _buildSidebarItem(Icons.rocket_launch_rounded, 'Computación de Alto Rendimiento', _currentSection == FileSection.hpc, () => _switchSection(FileSection.hpc), isDrawer: isDrawer),
+            ],
+          ),
+        ),
+        if (!isDrawer) const Spacer(),
+        if (isDrawer) const SizedBox(height: 16),
+        Padding(
+          padding: EdgeInsets.all(isDrawer ? 12 : 0),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey[200]!),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.cloud_sync, size: 18, color: Colors.grey[700]),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Almacenamiento',
+                      style: TextStyle(
+                        color: Colors.grey[800],
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 6,
+                    backgroundColor: Colors.grey[200],
+                    valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF4F46E5)),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '$usedFormatted de $limitFormatted usados',
+                  style: TextStyle(
+                    color: Colors.grey[600],
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
