@@ -380,6 +380,7 @@ class _SyncScreenState extends State<SyncScreen> {
         : (device['platform'] == 'Android' ? '/sdcard/Documents/UPB_Sync' : 'C:\\Users\\${widget.username}\\Sync');
 
     pickFileWeb(
+      context: context,
       onFileSelected: (fileName, fileSize, bytes) async {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -614,7 +615,7 @@ class _SyncScreenState extends State<SyncScreen> {
                           icon: const Icon(Icons.drive_folder_upload, color: Color(0xFF4F46E5)),
                           tooltip: 'Examinar carpeta...',
                           onPressed: () async {
-                            final picked = await pickNativeDirectory();
+                            final picked = await pickNativeDirectory(context);
                             if (picked != null && picked.isNotEmpty) {
                               setDlgState(() => folderCtrl.text = picked);
                             }
@@ -866,6 +867,7 @@ class _SyncScreenState extends State<SyncScreen> {
                               ),
                               onPressed: () {
                                 pickFileWeb(
+                                  context: context,
                                   onFileSelected: (fileName, fileSize, bytes) {
                                     final u8 = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
                                     if (gpg.isGpgEncrypted(u8)) {
@@ -1027,7 +1029,7 @@ class _SyncScreenState extends State<SyncScreen> {
                               icon: const Icon(Icons.drive_folder_upload, color: Color(0xFF4F46E5)),
                               tooltip: 'Examinar carpeta...',
                               onPressed: () async {
-                                final picked = await pickNativeDirectory();
+                                final picked = await pickNativeDirectory(context);
                                 if (picked != null && picked.isNotEmpty) {
                                   setDlgState(() => folderCtrl.text = picked);
                                 }

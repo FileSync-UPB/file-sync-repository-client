@@ -26,6 +26,7 @@ void openUrlOrDownload(String url, {String? downloadName}) async {
 
 void pickFileWeb({
   required Function(String name, int size, List<int> bytes) onFileSelected,
+  BuildContext? context,
 }) async {
   try {
     if (Platform.isAndroid) {
@@ -76,6 +77,62 @@ $form.Dispose()
       }
       return;
     }
+
+    if (Platform.isLinux) {
+      String selectedPath = '';
+
+      // 1. Probar zenity (estándar en Ubuntu Desktop / GNOME)
+      try {
+        final res = await Process.run('zenity', [
+          '--file-selection',
+          '--title=Seleccionar archivo para subir a FyleSync',
+        ]);
+        if (res.exitCode == 0) {
+          selectedPath = res.stdout.toString().trim();
+        }
+      } catch (_) {}
+
+      // 2. Probar kdialog (KDE Plasma)
+      if (selectedPath.isEmpty) {
+        try {
+          final res = await Process.run('kdialog', [
+            '--getopenfilename',
+            '.',
+          ]);
+          if (res.exitCode == 0) {
+            selectedPath = res.stdout.toString().trim();
+          }
+        } catch (_) {}
+      }
+
+      // 3. Probar Python 3 tkinter
+      if (selectedPath.isEmpty) {
+        try {
+          final res = await Process.run('python3', [
+            '-c',
+            'import tkinter as tk, tkinter.filedialog as fd; r=tk.Tk(); r.withdraw(); p=fd.askopenfilename(); print(p if p else "")',
+          ]);
+          if (res.exitCode == 0) {
+            selectedPath = res.stdout.toString().trim();
+          }
+        } catch (_) {}
+      }
+
+      // 4. Fallback: Diálogo interactivo en Flutter si no hay utilidades de ventana emergente
+      if (selectedPath.isEmpty && context != null && context.mounted) {
+        selectedPath = await _showManualLinuxFileDialog(context) ?? '';
+      }
+
+      if (selectedPath.isNotEmpty) {
+        final file = File(selectedPath);
+        if (await file.exists()) {
+          final bytes = await file.readAsBytes();
+          final name = file.uri.pathSegments.where((s) => s.isNotEmpty).last;
+          onFileSelected(name, bytes.length, bytes);
+        }
+      }
+      return;
+    }
   } catch (e) {
     debugPrint('Error en pickFileWeb (nativo): $e');
   }
@@ -91,7 +148,7 @@ Widget buildHtmlPlatformView(String viewId) {
   );
 }
 
-Future<String?> pickNativeDirectory() async {
+Future<String?> pickNativeDirectory([BuildContext? context]) async {
   try {
     if (Platform.isWindows) {
       const script = r'''
@@ -115,10 +172,185 @@ $form.Dispose()
         return selectedPath;
       }
     }
+
+    if (Platform.isLinux) {
+      // 1. Probar zenity
+      try {
+        final res = await Process.run('zenity', [
+          '--file-selection',
+          '--directory',
+          '--title=Seleccionar carpeta para sincronización con FyleSync',
+        ]);
+        if (res.exitCode == 0) {
+          final dirPath = res.stdout.toString().trim();
+          if (dirPath.isNotEmpty) return dirPath;
+        }
+      } catch (_) {}
+
+      // 2. Probar kdialog
+      try {
+        final res = await Process.run('kdialog', [
+          '--getexistingdirectory',
+          '.',
+        ]);
+        if (res.exitCode == 0) {
+          final dirPath = res.stdout.toString().trim();
+          if (dirPath.isNotEmpty) return dirPath;
+        }
+      } catch (_) {}
+
+      // 3. Probar Python 3
+      try {
+        final res = await Process.run('python3', [
+          '-c',
+          'import tkinter as tk, tkinter.filedialog as fd; r=tk.Tk(); r.withdraw(); p=fd.askdirectory(); print(p if p else "")',
+        ]);
+        if (res.exitCode == 0) {
+          final dirPath = res.stdout.toString().trim();
+          if (dirPath.isNotEmpty) return dirPath;
+        }
+      } catch (_) {}
+
+      // 4. Fallback interactivo en pantalla
+      if (context != null && context.mounted) {
+        return await _showManualLinuxDirectoryDialog(context);
+      }
+    }
   } catch (e) {
     debugPrint('Error en pickNativeDirectory: $e');
   }
   return null;
+}
+
+Future<String?> _showManualLinuxFileDialog(BuildContext context) async {
+  final homeDir = Platform.environment['HOME'] ?? '/home';
+  final textCtrl = TextEditingController(text: '$homeDir/');
+  return showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.upload_file, color: Color(0xFF4F46E5)),
+          SizedBox(width: 8),
+          Text('Seleccionar archivo'),
+        ],
+      ),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Ingresa la ruta completa del archivo que deseas subir a FyleSync:',
+              style: TextStyle(fontSize: 13, color: Colors.grey),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: textCtrl,
+              autofocus: true,
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.description_outlined),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                hintText: '/home/user/documento.pdf',
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(null),
+          child: const Text('Cancelar'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF4F46E5),
+            foregroundColor: Colors.white,
+          ),
+          onPressed: () {
+            final val = textCtrl.text.trim();
+            if (val.isNotEmpty && File(val).existsSync()) {
+              Navigator.of(ctx).pop(val);
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('El archivo no existe o la ruta es inválida.'),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
+          },
+          child: const Text('Seleccionar'),
+        ),
+      ],
+    ),
+  );
+}
+
+Future<String?> _showManualLinuxDirectoryDialog(BuildContext context) async {
+  final homeDir = Platform.environment['HOME'] ?? '/home';
+  final textCtrl = TextEditingController(text: '$homeDir/FyleSync');
+  return showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.folder_open, color: Color(0xFF4F46E5)),
+          SizedBox(width: 8),
+          Text('Carpeta de Sincronización'),
+        ],
+      ),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Ingresa la ruta de la carpeta local a sincronizar:',
+              style: TextStyle(fontSize: 13, color: Colors.grey),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: textCtrl,
+              autofocus: true,
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.folder_special_outlined),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                hintText: '/home/user/FyleSync',
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(null),
+          child: const Text('Cancelar'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF4F46E5),
+            foregroundColor: Colors.white,
+          ),
+          onPressed: () {
+            final val = textCtrl.text.trim();
+            if (val.isNotEmpty) {
+              final dir = Directory(val);
+              if (!dir.existsSync()) {
+                try {
+                  dir.createSync(recursive: true);
+                } catch (_) {}
+              }
+              Navigator.of(ctx).pop(val);
+            }
+          },
+          child: const Text('Aceptar'),
+        ),
+      ],
+    ),
+  );
 }
 
 Future<Map<String, dynamic>> runNativeSyncClient({

@@ -11,7 +11,10 @@ void openUrlOrDownload(String url, {String? downloadName}) {
   anchor.click();
 }
 
-void pickFileWeb({required Function(String name, int size, List<int> bytes) onFileSelected}) {
+void pickFileWeb({
+  required Function(String name, int size, List<int> bytes) onFileSelected,
+  BuildContext? context,
+}) {
   final uploadInput = html.FileUploadInputElement();
   uploadInput.multiple = false;
   uploadInput.click();
@@ -62,7 +65,7 @@ Widget buildHtmlPlatformView(String viewId) {
   return HtmlElementView(viewType: viewId);
 }
 
-Future<String?> pickNativeDirectory() async {
+Future<String?> pickNativeDirectory([BuildContext? context]) async {
   return null;
 }
 

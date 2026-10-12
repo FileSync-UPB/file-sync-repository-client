@@ -285,6 +285,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _pickAndUploadFile() {
     pickFileWeb(
+      context: context,
       onFileSelected: (name, size, bytes) async {
         setState(() {
           _isUploading = true;

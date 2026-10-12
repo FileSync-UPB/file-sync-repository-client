@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:ui';
+import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart' as xml;
@@ -321,6 +322,17 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                                         ),
                                       ),
                               ),
+                              const SizedBox(height: 12),
+                              OutlinedButton.icon(
+                                onPressed: _isLoading ? null : _showRegisterUserDialog,
+                                icon: const Icon(Icons.person_add_alt_1_rounded, size: 16, color: Colors.white),
+                                label: const Text('Registrar Nuevo Usuario', style: TextStyle(color: Colors.white, fontSize: 14)),
+                                style: OutlinedButton.styleFrom(
+                                  side: BorderSide(color: Colors.white.withOpacity(0.3)),
+                                  padding: const EdgeInsets.symmetric(vertical: 14),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                ),
+                              ),
                               const SizedBox(height: 16),
                               InkWell(
                                 onTap: _showServerConfigDialog,
@@ -542,6 +554,234 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                 }
               },
               child: const Text('Guardar Configuración'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showRegisterUserDialog() async {
+    final userCtrl = TextEditingController();
+    final passCtrl = TextEditingController();
+    final nameCtrl = TextEditingController();
+    final surnameCtrl = TextEditingController();
+    final mailCtrl = TextEditingController();
+    String selectedRole = 'INVESTIGADOR';
+    bool isSubmitting = false;
+    String? dialogError;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dlgCtx) => StatefulBuilder(
+        builder: (context, setDlgState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.person_add_rounded, color: Color(0xFF4F46E5)),
+              SizedBox(width: 10),
+              Text('Registrar Usuario y Crear Rutas', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Se creará la cuenta en OpenLDAP, MySQL y se aprovisionará automáticamente el directorio /var/fylesync/home/<usuario>.',
+                    style: TextStyle(fontSize: 13, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 16),
+                  if (dialogError != null)
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.red.withOpacity(0.3)),
+                      ),
+                      child: Text(dialogError!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+                    ),
+                  TextField(
+                    controller: userCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Nombre de Usuario *',
+                      prefixIcon: Icon(Icons.account_circle_outlined),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: passCtrl,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Contraseña *',
+                      prefixIcon: Icon(Icons.lock_outline),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: nameCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Nombre',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: surnameCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Apellido',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: mailCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Correo Electrónico (opcional)',
+                      prefixIcon: Icon(Icons.email_outlined),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: selectedRole,
+                    decoration: const InputDecoration(
+                      labelText: 'Rol UPB',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'INVESTIGADOR', child: Text('Investigador')),
+                      DropdownMenuItem(value: 'EMPLEADO', child: Text('Empleado')),
+                      DropdownMenuItem(value: 'INVITADO', child: Text('Invitado')),
+                      DropdownMenuItem(value: 'ADMINISTRADOR', child: Text('Administrador')),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) {
+                        setDlgState(() => selectedRole = val);
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.of(dlgCtx).pop(),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF4F46E5),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final u = userCtrl.text.trim();
+                      final p = passCtrl.text;
+                      if (u.isEmpty || p.isEmpty) {
+                        setDlgState(() => dialogError = 'Usuario y contraseña son requeridos');
+                        return;
+                      }
+
+                      setDlgState(() {
+                        isSubmitting = true;
+                        dialogError = null;
+                      });
+
+                      try {
+                        final payload = jsonEncode({
+                          'username': u,
+                          'password': p,
+                          'name': nameCtrl.text.trim(),
+                          'surname': surnameCtrl.text.trim(),
+                          'mail': mailCtrl.text.trim(),
+                          'role': selectedRole,
+                          'quotaMb': 1024,
+                        });
+
+                        // Intentar primero con users-service (PHP/LDAP/MySQL en puerto 8080)
+                        http.Response? res;
+                        try {
+                          res = await http.post(
+                            Uri.parse('${ApiConfig.usersUrl}/public/register.php'),
+                            headers: {'Content-Type': 'application/json'},
+                            body: payload,
+                          ).timeout(const Duration(seconds: 4));
+                        } catch (_) {
+                          // Si falla o timeout, intentar por streaming-server (puerto 3000)
+                          try {
+                            res = await http.post(
+                              Uri.parse('${ApiConfig.streamingUrl}/api/users/register'),
+                              headers: {'Content-Type': 'application/json'},
+                              body: payload,
+                            ).timeout(const Duration(seconds: 4));
+                          } catch (_) {}
+                        }
+
+                        if (res != null && (res.statusCode == 200 || res.statusCode == 201)) {
+                          if (mounted) {
+                            _usernameController.text = u;
+                            _passwordController.text = p;
+                          }
+                          if (dlgCtx.mounted) {
+                            Navigator.of(dlgCtx).pop();
+                          }
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('¡Usuario "$u" creado con éxito! Ruta: /var/fylesync/home/$u'),
+                                backgroundColor: Colors.green[700],
+                                duration: const Duration(seconds: 5),
+                              ),
+                            );
+                          }
+                        } else {
+                          String msg = 'Error en el registro (${res?.statusCode})';
+                          if (res != null) {
+                            try {
+                              final bodyJson = jsonDecode(res.body);
+                              msg = bodyJson['message'] ?? bodyJson['error'] ?? msg;
+                            } catch (_) {
+                              msg = res.body;
+                            }
+                          }
+                          setDlgState(() {
+                            isSubmitting = false;
+                            dialogError = msg;
+                          });
+                        }
+                      } catch (e) {
+                        setDlgState(() {
+                          isSubmitting = false;
+                          dialogError = 'Error de conexión: $e';
+                        });
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Text('Registrar y Aprovisionar'),
             ),
           ],
         ),

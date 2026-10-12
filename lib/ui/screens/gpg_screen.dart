@@ -92,6 +92,7 @@ class _GpgScreenState extends State<GpgScreen> {
     });
 
     pickFileWeb(
+      context: context,
       onFileSelected: (name, size, rawBytes) {
         try {
           final bytes = Uint8List.fromList(rawBytes);
