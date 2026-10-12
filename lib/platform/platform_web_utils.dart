@@ -1,6 +1,7 @@
 import 'dart:html' as html;
 import 'dart:ui_web' as ui_web;
 import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
 
 void openUrlOrDownload(String url, {String? downloadName}) {
   final anchor = html.AnchorElement(href: url);
@@ -90,3 +91,24 @@ Future<bool> saveLocalFile(String dirPath, String fileName, List<int> bytes) asy
 Future<bool> requestStoragePermissions() async {
   return true;
 }
+
+void initPlatformVideoPlayer() {
+  // No-op en plataforma Web
+}
+
+void clearCachedVideo(String? fileId, String? fileName) {
+  // No-op en Web
+}
+
+Future<VideoPlayerController> createVideoPlayerController(
+  String url,
+  Map<String, String> headers, {
+  String? fileName,
+  String? fileId,
+}) async {
+  return VideoPlayerController.networkUrl(
+    Uri.parse(url),
+    httpHeaders: headers,
+  );
+}
+

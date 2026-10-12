@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:ui';
-
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart' as xml;
 import '../../config/api_config.dart';
@@ -15,8 +15,8 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStateMixin {
   late AnimationController _bgController;
-  final _usernameController = TextEditingController(text: 'admin');
-  final _passwordController = TextEditingController(text: 'Admin123!');
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
   bool _isLoading = false;
   String? _errorMessage;
 
@@ -27,6 +27,25 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
       vsync: this,
       duration: const Duration(seconds: 10),
     )..repeat(reverse: true);
+    _checkSavedSession();
+  }
+
+  Future<void> _checkSavedSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedToken = prefs.getString('auth_token');
+    final savedUsername = prefs.getString('auth_username');
+    if (savedToken != null && savedToken.isNotEmpty && savedUsername != null && savedUsername.isNotEmpty) {
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => HomeScreen(
+              token: savedToken,
+              username: savedUsername,
+            ),
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -74,6 +93,10 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
         
         if (tokenNode != null) {
           final token = tokenNode.innerText;
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('auth_token', token);
+          await prefs.setString('auth_username', username);
+
           if (mounted) {
             Navigator.of(context).pushReplacement(
               MaterialPageRoute(
@@ -298,6 +321,30 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                                         ),
                                       ),
                               ),
+                              const SizedBox(height: 16),
+                              InkWell(
+                                onTap: _showServerConfigDialog,
+                                borderRadius: BorderRadius.circular(8),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.settings_ethernet, size: 14, color: Colors.indigoAccent),
+                                      const SizedBox(width: 6),
+                                      Flexible(
+                                        child: Text(
+                                          'Servidor: ${ApiConfig.host}',
+                                          style: const TextStyle(fontSize: 12, color: Colors.white70),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      const Icon(Icons.edit, size: 12, color: Colors.white38),
+                                    ],
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
                         ),
@@ -308,7 +355,196 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
               ),
             ),
           ),
+
+          // Botón flotante superior para configuración rápida de IP
+          Positioned(
+            top: 16,
+            right: 16,
+            child: SafeArea(
+              child: IconButton(
+                icon: const Icon(Icons.settings_rounded, color: Colors.white70),
+                tooltip: 'Configurar IP del Servidor / Red',
+                onPressed: _showServerConfigDialog,
+              ),
+            ),
+          ),
         ],
+      ),
+    );
+  }
+
+  void _showServerConfigDialog() {
+    final hostCtrl = TextEditingController(text: ApiConfig.host);
+    final usersCtrl = TextEditingController(text: ApiConfig.usersHost != ApiConfig.host ? ApiConfig.usersHost : '');
+    final streamCtrl = TextEditingController(text: ApiConfig.streamingHost != ApiConfig.host ? ApiConfig.streamingHost : '');
+    final syncCtrl = TextEditingController(text: ApiConfig.syncHost != ApiConfig.host ? ApiConfig.syncHost : '');
+    final hpcCtrl = TextEditingController(text: ApiConfig.hpcHost != ApiConfig.host ? ApiConfig.hpcHost : '');
+
+    bool showAdvanced = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlgState) => AlertDialog(
+          backgroundColor: const Color(0xFF1E293B),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.dns_rounded, color: Colors.indigoAccent),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Configuración de Servidor & IP',
+                  style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 400),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Si la IP de la máquina cambió en la red UPB o te conectas desde otra PC/móvil, configúrala aquí:',
+                    style: TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: hostCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      labelText: 'IP / Host Principal del Servidor',
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      hintText: '192.168.1.1 o localhost',
+                      hintStyle: const TextStyle(color: Colors.white30),
+                      prefixIcon: const Icon(Icons.router_outlined, color: Colors.indigoAccent),
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.05),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      TextButton.icon(
+                        icon: const Icon(Icons.my_location, size: 16, color: Colors.cyanAccent),
+                        label: const Text('Fijar 192.168.1.1', style: TextStyle(color: Colors.cyanAccent, fontSize: 12)),
+                        onPressed: () => setDlgState(() => hostCtrl.text = '192.168.1.1'),
+                      ),
+                      const Spacer(),
+                      TextButton(
+                        child: Text(
+                          showAdvanced ? 'Ocultar Avanzado' : 'Despliegue 4 Máquinas',
+                          style: const TextStyle(color: Colors.indigoAccent, fontSize: 12),
+                        ),
+                        onPressed: () => setDlgState(() => showAdvanced = !showAdvanced),
+                      ),
+                    ],
+                  ),
+                  if (showAdvanced) ...[
+                    const Divider(color: Colors.white12, height: 24),
+                    const Text(
+                      'IPs Distribuidas (Para el clúster de 4 máquinas):',
+                      style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: usersCtrl,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: InputDecoration(
+                        labelText: 'Máquina 1 (Usuarios / LDAP / SOAP :8080)',
+                        labelStyle: const TextStyle(color: Colors.white60, fontSize: 12),
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.04),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: streamCtrl,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: InputDecoration(
+                        labelText: 'Máquina 2 (Almacenamiento / Streaming :3000)',
+                        labelStyle: const TextStyle(color: Colors.white60, fontSize: 12),
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.04),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: syncCtrl,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: InputDecoration(
+                        labelText: 'Máquina 3 (FileSync gRPC :8443)',
+                        labelStyle: const TextStyle(color: Colors.white60, fontSize: 12),
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.04),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: hpcCtrl,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: InputDecoration(
+                        labelText: 'Máquina 4 (Maestro HPC & Monitoreo :8081)',
+                        labelStyle: const TextStyle(color: Colors.white60, fontSize: 12),
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.04),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white60)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF4F46E5),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () async {
+                final mainH = hostCtrl.text.trim();
+                if (showAdvanced) {
+                  await ApiConfig.setDistributedHosts(
+                    mainHost: mainH,
+                    usersHost: usersCtrl.text.trim(),
+                    streamingHost: streamCtrl.text.trim(),
+                    syncHost: syncCtrl.text.trim(),
+                    hpcHost: hpcCtrl.text.trim(),
+                  );
+                } else {
+                  await ApiConfig.setHost(mainH);
+                }
+                if (ctx.mounted) {
+                  Navigator.of(ctx).pop();
+                }
+                if (mounted) {
+                  setState(() {});
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Servidor actualizado a: ${ApiConfig.host}'),
+                      backgroundColor: Colors.green[700],
+                      duration: const Duration(seconds: 3),
+                    ),
+                  );
+                }
+              },
+              child: const Text('Guardar Configuración'),
+            ),
+          ],
+        ),
       ),
     );
   }

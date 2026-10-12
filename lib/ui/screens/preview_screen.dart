@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'package:video_player/video_player.dart';
-import 'package:video_player_win/video_player_win.dart';
 import '../../config/api_config.dart';
 import '../../platform/platform_utils.dart';
 
@@ -56,41 +55,42 @@ class _PreviewScreenState extends State<PreviewScreen> {
     }
   }
 
-  void _initVideoPlayer() {
+  Future<void> _initVideoPlayer() async {
     try {
-      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
-        WindowsVideoPlayer.registerWith();
+      final headers = widget.token.isNotEmpty ? {'Authorization': 'Bearer ${widget.token}'} : const <String, String>{};
+      final controller = await createVideoPlayerController(
+        _url,
+        headers,
+        fileName: widget.name,
+        fileId: widget.id,
+      );
+
+      if (!mounted) {
+        controller.dispose();
+        return;
       }
 
-      _videoController = VideoPlayerController.networkUrl(
-        Uri.parse(_url),
-        httpHeaders: widget.token.isNotEmpty ? {'Authorization': 'Bearer ${widget.token}'} : const {},
-      );
-      _videoController!.initialize().then((_) {
-        if (mounted) {
-          setState(() {
-            _isVideoInitialized = true;
-            _isVideoError = false;
-          });
-          _videoController!.play();
-        }
-      }).catchError((err) {
-        if (mounted) {
-          setState(() {
-            _isVideoError = true;
-            _videoErrorMessage = err.toString();
-          });
-        }
-      });
+      _videoController = controller;
+      await _videoController!.initialize();
+
+      if (mounted) {
+        setState(() {
+          _isVideoInitialized = true;
+          _isVideoError = false;
+        });
+        _videoController!.play();
+      }
 
       _videoController!.addListener(() {
         if (mounted) setState(() {});
       });
-    } catch (e) {
-      setState(() {
-        _isVideoError = true;
-        _videoErrorMessage = e.toString();
-      });
+    } catch (err) {
+      if (mounted) {
+        setState(() {
+          _isVideoError = true;
+          _videoErrorMessage = err.toString();
+        });
+      }
     }
   }
 
@@ -120,6 +120,12 @@ class _PreviewScreenState extends State<PreviewScreen> {
         foregroundColor: Colors.white,
         title: Text(widget.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
         actions: [
+          if (_isPdf)
+            IconButton(
+              icon: const Icon(Icons.open_in_new),
+              tooltip: 'Abrir PDF en pestaña',
+              onPressed: () => openUrlOrDownload(_url, downloadName: widget.name),
+            ),
           IconButton(
             icon: const Icon(Icons.download),
             tooltip: 'Descargar archivo',
@@ -181,10 +187,13 @@ class _PreviewScreenState extends State<PreviewScreen> {
               const SizedBox(height: 20),
               ElevatedButton.icon(
                 onPressed: () {
+                  clearCachedVideo(widget.id, widget.name);
                   setState(() {
                     _isVideoError = false;
                     _isVideoInitialized = false;
                   });
+                  _videoController?.dispose();
+                  _videoController = null;
                   _initVideoPlayer();
                 },
                 icon: const Icon(Icons.refresh),
@@ -304,7 +313,7 @@ class _PreviewScreenState extends State<PreviewScreen> {
         height: double.infinity,
         child: SfPdfViewer.network(
           _url,
-          headers: widget.token.isNotEmpty ? {'Authorization': 'Bearer ${widget.token}'} : null,
+          headers: kIsWeb ? null : (widget.token.isNotEmpty ? {'Authorization': 'Bearer ${widget.token}'} : null),
           canShowScrollHead: true,
           canShowScrollStatus: true,
           enableDoubleTapZooming: true,

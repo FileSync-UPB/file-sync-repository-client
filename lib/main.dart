@@ -1,13 +1,34 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'config/api_config.dart';
+import 'platform/platform_utils.dart';
 import 'ui/screens/login_screen.dart';
+import 'ui/screens/home_screen.dart';
 import 'ui/screens/public_view_screen.dart';
 
-void main() {
-  runApp(const FyleSyncApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  initPlatformVideoPlayer();
+  await ApiConfig.init();
+  final prefs = await SharedPreferences.getInstance();
+  final savedToken = prefs.getString('auth_token');
+  final savedUsername = prefs.getString('auth_username');
+
+  runApp(FyleSyncApp(
+    initialToken: savedToken,
+    initialUsername: savedUsername,
+  ));
 }
 
 class FyleSyncApp extends StatelessWidget {
-  const FyleSyncApp({super.key});
+  final String? initialToken;
+  final String? initialUsername;
+
+  const FyleSyncApp({
+    super.key,
+    this.initialToken,
+    this.initialUsername,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -20,6 +41,11 @@ class FyleSyncApp extends StatelessWidget {
         shareId = params['share'];
       }
     }
+
+    final bool hasValidSavedSession = initialToken != null &&
+        initialToken!.isNotEmpty &&
+        initialUsername != null &&
+        initialUsername!.isNotEmpty;
 
     return MaterialApp(
       title: 'FileSync Enterprise',
@@ -34,7 +60,12 @@ class FyleSyncApp extends StatelessWidget {
       ),
       home: shareId != null && shareId.isNotEmpty
           ? PublicViewScreen(fileId: shareId)
-          : const LoginScreen(),
+          : hasValidSavedSession
+              ? HomeScreen(
+                  token: initialToken!,
+                  username: initialUsername!,
+                )
+              : const LoginScreen(),
     );
   }
 }

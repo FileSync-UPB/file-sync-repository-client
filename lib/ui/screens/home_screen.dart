@@ -1,10 +1,14 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'login_screen.dart';
 import 'preview_screen.dart';
 import 'share_dialog_inner.dart';
 import 'sync_screen.dart';
 import 'hpc_screen.dart';
+import 'gpg_screen.dart';
 import '../../config/api_config.dart';
 import '../../platform/platform_utils.dart';
 
@@ -16,6 +20,7 @@ enum FileSection {
   trash,
   sync,
   hpc,
+  gpg,
 }
 
 class HomeScreen extends StatefulWidget {
@@ -66,6 +71,18 @@ class _HomeScreenState extends State<HomeScreen> {
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
   }
 
+  Future<void> _handleLogout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('auth_token');
+    await prefs.remove('auth_username');
+    if (mounted) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
+      );
+    }
+  }
+
   Future<void> _fetchUsage() async {
     try {
       final response = await http.get(
@@ -85,7 +102,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _fetchFiles() async {
-    if (_currentSection == FileSection.sync || _currentSection == FileSection.hpc) {
+    if (_currentSection == FileSection.sync || _currentSection == FileSection.hpc || _currentSection == FileSection.gpg) {
       setState(() {
         _isLoading = false;
         _errorMessage = null;
@@ -121,6 +138,7 @@ class _HomeScreenState extends State<HomeScreen> {
             break;
           case FileSection.sync:
           case FileSection.hpc:
+          case FileSection.gpg:
             urlStr = '${ApiConfig.streamingUrl}/api/files';
             break;
         }
@@ -138,6 +156,9 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() {
           _items = data['items'] ?? [];
         });
+      } else if (response.statusCode == 401) {
+        await _handleLogout();
+        return;
       } else {
         setState(() {
           _errorMessage = 'Error al cargar los archivos (${response.statusCode})';
@@ -466,6 +487,8 @@ class _HomeScreenState extends State<HomeScreen> {
         return 'Sincronización de Dispositivos';
       case FileSection.hpc:
         return 'Computación de Alto Rendimiento';
+      case FileSection.gpg:
+        return 'Seguridad y Cifrado GPG';
     }
   }
 
@@ -485,6 +508,8 @@ class _HomeScreenState extends State<HomeScreen> {
         return 'Estado y control de sincronización automática de clientes Windows, Linux y Android';
       case FileSection.hpc:
         return 'Ejecución acelerada y distribuida de algoritmos científicos, análisis de datos y procesamiento intensivo';
+      case FileSection.gpg:
+        return 'Gestión de claves asimétricas Zero-Knowledge, verificación y descifrado de archivos';
     }
   }
 
@@ -504,6 +529,8 @@ class _HomeScreenState extends State<HomeScreen> {
         return Icons.sync_alt;
       case FileSection.hpc:
         return Icons.rocket_launch_rounded;
+      case FileSection.gpg:
+        return Icons.security_rounded;
     }
   }
 
@@ -523,6 +550,8 @@ class _HomeScreenState extends State<HomeScreen> {
         return 'Panel de sincronización';
       case FileSection.hpc:
         return 'Panel de Computación Avanzada';
+      case FileSection.gpg:
+        return 'Módulo de Seguridad GPG';
     }
   }
 
@@ -537,11 +566,13 @@ class _HomeScreenState extends State<HomeScreen> {
       case FileSection.starred:
         return 'Usa la opción de destacar en cualquier archivo para tenerlo a mano';
       case FileSection.trash:
-        return 'Los elementos que envíes a la papelera aparecerán en este apartado';
+        return 'Los elementos borrados permanecerán aquí temporalmente';
       case FileSection.sync:
-        return 'Administra tus dispositivos y políticas de red';
+        return 'Vincula y sincroniza tus dispositivos móviles o portátiles';
       case FileSection.hpc:
-        return 'Configura parámetros y envía tareas de procesamiento distribuido';
+        return 'Envía y monitorea tareas científicas en el cluster';
+      case FileSection.gpg:
+        return 'Administra tus claves de respaldo y descifra archivos en cliente';
     }
   }
 
@@ -823,6 +854,18 @@ class _HomeScreenState extends State<HomeScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   int _getBottomNavIndex(FileSection section) {
+    if (kIsWeb) {
+      switch (section) {
+        case FileSection.myDrive:
+          return 0;
+        case FileSection.sharedWithMe:
+          return 1;
+        case FileSection.hpc:
+          return 2;
+        default:
+          return 3;
+      }
+    }
     switch (section) {
       case FileSection.myDrive:
         return 0;
@@ -866,24 +909,38 @@ class _HomeScreenState extends State<HomeScreen> {
           ? BottomNavigationBar(
               currentIndex: _getBottomNavIndex(_currentSection),
               onTap: (index) {
-                if (index == 0) _switchSection(FileSection.myDrive);
-                if (index == 1) _switchSection(FileSection.sharedWithMe);
-                if (index == 2) _switchSection(FileSection.sync);
-                if (index == 3) _switchSection(FileSection.hpc);
-                if (index == 4) _scaffoldKey.currentState?.openDrawer();
+                if (kIsWeb) {
+                  if (index == 0) _switchSection(FileSection.myDrive);
+                  if (index == 1) _switchSection(FileSection.sharedWithMe);
+                  if (index == 2) _switchSection(FileSection.hpc);
+                  if (index == 3) _scaffoldKey.currentState?.openDrawer();
+                } else {
+                  if (index == 0) _switchSection(FileSection.myDrive);
+                  if (index == 1) _switchSection(FileSection.sharedWithMe);
+                  if (index == 2) _switchSection(FileSection.sync);
+                  if (index == 3) _switchSection(FileSection.hpc);
+                  if (index == 4) _scaffoldKey.currentState?.openDrawer();
+                }
               },
               selectedItemColor: const Color(0xFF4F46E5),
               unselectedItemColor: Colors.grey[500],
               type: BottomNavigationBarType.fixed,
               backgroundColor: Colors.white,
               elevation: 8,
-              items: const [
-                BottomNavigationBarItem(icon: Icon(Icons.folder), label: 'Archivos'),
-                BottomNavigationBarItem(icon: Icon(Icons.group_outlined), label: 'Compartidos'),
-                BottomNavigationBarItem(icon: Icon(Icons.sync_alt), label: 'Sync'),
-                BottomNavigationBarItem(icon: Icon(Icons.rocket_launch_rounded), label: 'Cómputo'),
-                BottomNavigationBarItem(icon: Icon(Icons.menu), label: 'Más'),
-              ],
+              items: kIsWeb
+                  ? const [
+                      BottomNavigationBarItem(icon: Icon(Icons.folder), label: 'Archivos'),
+                      BottomNavigationBarItem(icon: Icon(Icons.group_outlined), label: 'Compartidos'),
+                      BottomNavigationBarItem(icon: Icon(Icons.rocket_launch_rounded), label: 'Cómputo'),
+                      BottomNavigationBarItem(icon: Icon(Icons.menu), label: 'Más'),
+                    ]
+                  : const [
+                      BottomNavigationBarItem(icon: Icon(Icons.folder), label: 'Archivos'),
+                      BottomNavigationBarItem(icon: Icon(Icons.group_outlined), label: 'Compartidos'),
+                      BottomNavigationBarItem(icon: Icon(Icons.sync_alt), label: 'Sync'),
+                      BottomNavigationBarItem(icon: Icon(Icons.rocket_launch_rounded), label: 'Cómputo'),
+                      BottomNavigationBarItem(icon: Icon(Icons.menu), label: 'Más'),
+                    ],
             )
           : null,
       appBar: AppBar(
@@ -966,9 +1023,7 @@ class _HomeScreenState extends State<HomeScreen> {
           IconButton(
             tooltip: 'Cerrar Sesión',
             icon: Icon(Icons.logout, color: Colors.grey[600]),
-            onPressed: () {
-              Navigator.of(context).pushReplacementNamed('/');
-            },
+            onPressed: _handleLogout,
           ),
           const SizedBox(width: 8),
         ],
@@ -1193,11 +1248,54 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildContent() {
     if (_currentSection == FileSection.sync) {
+      if (kIsWeb) {
+        return Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 500),
+            child: Container(
+              margin: const EdgeInsets.all(24),
+              padding: const EdgeInsets.all(32),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 16, offset: const Offset(0, 4)),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.cloud_done_rounded, color: Color(0xFF4F46E5), size: 56),
+                  const SizedBox(height: 16),
+                  const Text('Conexión Permanente en Web', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Color(0xFF0F172A))),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'La versión web opera directamente sobre el repositorio central en la nube. La sincronización de árbol de directorios locales está reservada para las aplicaciones de escritorio (Windows/Linux) y celulares (Android).',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Color(0xFF475569), fontSize: 13, height: 1.4),
+                  ),
+                  const SizedBox(height: 20),
+                  ElevatedButton(
+                    onPressed: () => _switchSection(FileSection.myDrive),
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4F46E5), foregroundColor: Colors.white),
+                    child: const Text('Volver a Mi Unidad'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
       return SyncScreen(token: widget.token, username: widget.username);
     }
 
     if (_currentSection == FileSection.hpc) {
       return HpcScreen(token: widget.token, username: widget.username);
+    }
+
+    if (_currentSection == FileSection.gpg) {
+      return GpgScreen(token: widget.token, username: widget.username);
     }
 
     if (_isLoading) {
@@ -1819,9 +1917,10 @@ class _HomeScreenState extends State<HomeScreen> {
               _buildSidebarItem(Icons.delete_outline, 'Papelera', _currentSection == FileSection.trash, () => _switchSection(FileSection.trash), isDrawer: isDrawer),
               const SizedBox(height: 8),
               const Divider(height: 1, color: Color(0xFFE2E8F0)),
-              const SizedBox(height: 8),
-              _buildSidebarItem(Icons.sync_alt, 'Sincronización (Sync)', _currentSection == FileSection.sync, () => _switchSection(FileSection.sync), isDrawer: isDrawer),
+              if (!kIsWeb)
+                _buildSidebarItem(Icons.sync_alt, 'Sincronización (Sync)', _currentSection == FileSection.sync, () => _switchSection(FileSection.sync), isDrawer: isDrawer),
               _buildSidebarItem(Icons.rocket_launch_rounded, 'Computación de Alto Rendimiento', _currentSection == FileSection.hpc, () => _switchSection(FileSection.hpc), isDrawer: isDrawer),
+              _buildSidebarItem(Icons.security_rounded, 'Seguridad GPG', _currentSection == FileSection.gpg, () => _switchSection(FileSection.gpg), isDrawer: isDrawer),
             ],
           ),
         ),
@@ -1875,6 +1974,25 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
         ),
+        if (isDrawer) ...[
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: ListTile(
+              dense: true,
+              leading: const Icon(Icons.logout, color: Colors.redAccent, size: 20),
+              title: const Text(
+                'Cerrar Sesión',
+                style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w600, fontSize: 14),
+              ),
+              onTap: () {
+                Navigator.of(context).pop();
+                _handleLogout();
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
       ],
     );
   }

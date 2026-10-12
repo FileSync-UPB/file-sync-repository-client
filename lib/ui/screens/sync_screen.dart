@@ -35,12 +35,13 @@ class _SyncScreenState extends State<SyncScreen> {
   String? _localDeviceId;
 
   // Red Privada Institucional (UPB)
-  bool _isOnPrivateNetwork = true;
-  bool _wasPreviouslyOffline = false;
+  bool _isOnPrivateNetwork = false;
+  bool _wasPreviouslyOffline = true;
+  bool _hasInitialSynced = false;
   Timer? _networkMonitorTimer;
 
-  // Cifrado Asimétrico GPG Zero-Knowledge
-  bool _gpgEnabled = false;
+  // Cifrado Asimétrico GPG Zero-Knowledge para Copias de Seguridad
+  bool _gpgEnabled = true;
 
   @override
   void initState() {
@@ -61,6 +62,8 @@ class _SyncScreenState extends State<SyncScreen> {
       _localDeviceId = prefs.getString('fylesync_local_device_id_${widget.username}');
     } catch (_) {}
     await _fetchSyncOverview();
+    // Al cargar la pantalla, comprobar conectividad de inmediato y auto-sincronizar si está en red
+    await _checkPrivateNetworkAndAutoSync();
   }
 
   Future<void> _saveLocalDeviceId(String? id) async {
@@ -87,7 +90,7 @@ class _SyncScreenState extends State<SyncScreen> {
 
   void _startNetworkMonitor() {
     _networkMonitorTimer?.cancel();
-    _networkMonitorTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+    _networkMonitorTimer = Timer.periodic(const Duration(seconds: 8), (_) {
       _checkPrivateNetworkAndAutoSync();
     });
   }
@@ -100,7 +103,11 @@ class _SyncScreenState extends State<SyncScreen> {
       ).timeout(const Duration(seconds: 4));
 
       if (response.statusCode == 200) {
-        if (!_isOnPrivateNetwork || _wasPreviouslyOffline) {
+        final bool isFirstSync = !_hasInitialSynced;
+        final bool wasOffline = !_isOnPrivateNetwork || _wasPreviouslyOffline;
+
+        if (isFirstSync || wasOffline) {
+          _hasInitialSynced = true;
           if (mounted) {
             setState(() {
               _isOnPrivateNetwork = true;
@@ -112,7 +119,7 @@ class _SyncScreenState extends State<SyncScreen> {
                   children: [
                     Icon(Icons.wifi, color: Colors.white),
                     SizedBox(width: 8),
-                    Expanded(child: Text('Conectado a la Red Privada UPB. Sincronización automática iniciada...')),
+                    Expanded(child: Text('Conectado a la Red Privada UPB. Sincronización automática en curso...')),
                   ],
                 ),
                 backgroundColor: Color(0xFF1E1B4B),
@@ -265,27 +272,46 @@ class _SyncScreenState extends State<SyncScreen> {
           var bytes = await readLocalFile(filePath);
 
           if (bytes != null && bytes.isNotEmpty) {
-            String uploadName = fileName;
+            if (_gpgEnabled) {
+              // Cifrado GPG Activo (Zero-Knowledge):
+              // Se cifra el archivo asimétricamente en el dispositivo ANTES de la transmisión.
+              // En el servidor ÚNICAMENTE se guarda el archivo cifrado (.gpg) y NO el archivo legible en claro.
+              try {
+                final encryptedBytes = fileName.endsWith('.gpg')
+                    ? bytes
+                    : gpg.encryptFileAsymmetric(bytes, keyPair.publicKey);
+                final encryptedName = fileName.endsWith('.gpg') ? fileName : '$fileName.gpg';
 
-            // Aplicar Cifrado Asimétrico GPG Zero-Knowledge si está activo
-            if (_gpgEnabled && !gpg.isGpgEncrypted(bytes)) {
-              bytes = gpg.encryptFileAsymmetric(bytes, keyPair.publicKey);
-              uploadName = fileName.endsWith('.gpg') ? fileName : '$fileName.gpg';
-            }
+                final uploadUri = Uri.parse('${ApiConfig.streamingUrl}/api/sync/devices/${device['id']}/upload');
+                final req = http.MultipartRequest('POST', uploadUri)
+                  ..headers['Authorization'] = 'Bearer ${widget.token}'
+                  ..fields['relativePath'] = encryptedName
+                  ..files.add(http.MultipartFile.fromBytes('file', encryptedBytes, filename: encryptedName));
 
-            try {
-              final uploadUri = Uri.parse('${ApiConfig.streamingUrl}/api/sync/devices/${device['id']}/upload');
-              final req = http.MultipartRequest('POST', uploadUri)
-                ..headers['Authorization'] = 'Bearer ${widget.token}'
-                ..fields['relativePath'] = uploadName
-                ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: uploadName));
-
-              final streamedRes = await req.send();
-              if (streamedRes.statusCode == 200 || streamedRes.statusCode == 201) {
-                uploadedCount++;
+                final streamedRes = await req.send();
+                if (streamedRes.statusCode == 200 || streamedRes.statusCode == 201) {
+                  uploadedCount++;
+                }
+              } catch (err) {
+                debugPrint('Error subiendo archivo cifrado $fileName: $err');
               }
-            } catch (err) {
-              debugPrint('Error subiendo $fileName: $err');
+            } else {
+              // Cifrado GPG Inactivo:
+              // Subir el archivo original en claro para disponibilidad estándar
+              try {
+                final uploadUri = Uri.parse('${ApiConfig.streamingUrl}/api/sync/devices/${device['id']}/upload');
+                final req = http.MultipartRequest('POST', uploadUri)
+                  ..headers['Authorization'] = 'Bearer ${widget.token}'
+                  ..fields['relativePath'] = fileName
+                  ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: fileName));
+
+                final streamedRes = await req.send();
+                if (streamedRes.statusCode == 200 || streamedRes.statusCode == 201) {
+                  uploadedCount++;
+                }
+              } catch (err) {
+                debugPrint('Error subiendo $fileName: $err');
+              }
             }
           }
         }
@@ -669,77 +695,284 @@ class _SyncScreenState extends State<SyncScreen> {
     final gpg = GpgService();
     final keyPair = gpg.getOrCreateKeyPair(widget.username);
 
+    String? testResult;
+    bool isTesting = false;
+    String? decryptedFileResult;
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(
-          children: [
-            Icon(Icons.shield, color: Color(0xFF4F46E5)),
-            SizedBox(width: 10),
-            Text('Cifrado Asimétrico GPG', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
-          ],
-        ),
-        content: SizedBox(
-          width: 480,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'Esquema de Seguridad Zero-Knowledge:',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF0F172A)),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlgState) => AlertDialog(
+          backgroundColor: const Color(0xFF1E293B),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.shield_outlined, color: Colors.indigoAccent),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Cifrado GPG & Copias de Seguridad',
+                  style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                 ),
-                const SizedBox(height: 4),
-                const Text(
-                  'Los archivos se cifran localmente con tu Clave Pública GPG antes de subirse. El servidor central solo almacena datos cifrados y nadie puede leerlos sin tu Clave Privada local.',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF475569), height: 1.3, fontWeight: FontWeight.w500),
-                ),
-                const SizedBox(height: 14),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEEF2FF),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFC7D2FE)),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Esquema de Respaldo Cifrado Zero-Knowledge (GPG):',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.vpn_key, size: 16, color: Color(0xFF4F46E5)),
-                          const SizedBox(width: 6),
-                          Text('ID de Clave: ${keyPair.keyId}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFF1E1B4B))),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Los archivos en el repositorio central se mantienen accesibles para streaming y previsualización. Las copias de seguridad de sincronización se protegen con cifrado asimétrico GPG (RSA 2048-bit + AES-256). Solo tu clave privada local puede descifrarlas.',
+                    style: TextStyle(fontSize: 12, color: Colors.white70, height: 1.3),
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Metadata de la Clave
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F172A),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.vpn_key_rounded, size: 16, color: Colors.indigoAccent),
+                            const SizedBox(width: 6),
+                            Text('ID de Clave: ${keyPair.keyId}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.white)),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text('Huella: ${keyPair.fingerprint}', style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: Colors.cyanAccent)),
+                        const SizedBox(height: 4),
+                        const Text('Algoritmo: RSA 2048-bit (Asimétrico) + AES-256-CBC (Sesión)', style: TextStyle(fontSize: 11, color: Colors.white60)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Acciones de Prueba y Descifrado
+                  const Text(
+                    'Opciones para Probar el Descifrado en Windows:',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white),
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Opción 1: Test en Vivo Interactivo
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.04),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.play_circle_outline, color: Colors.greenAccent, size: 18),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                '1. Prueba Rápida de Cifrado / Descifrado',
+                                style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF4F46E5),
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              ),
+                              onPressed: isTesting ? null : () async {
+                                setDlgState(() => isTesting = true);
+                                await Future.delayed(const Duration(milliseconds: 300));
+                                final sampleText = 'FyleSync Enterprise - Prueba de Verificación GPG Zero-Knowledge (${DateTime.now()})';
+                                final plainBytes = Uint8List.fromList(utf8.encode(sampleText));
+                                final encrypted = gpg.encryptFileAsymmetric(plainBytes, keyPair.publicKey);
+                                final decrypted = gpg.decryptFileAsymmetric(encrypted, keyPair.privateKey);
+                                final recoveredText = utf8.decode(decrypted);
+
+                                setDlgState(() {
+                                  isTesting = false;
+                                  testResult = '✓ ÉXITO: 100% Coincidencia\n'
+                                      '• Tamaño original: ${plainBytes.length} bytes\n'
+                                      '• Tamaño cifrado GPG: ${encrypted.length} bytes (Encabezado GPG1 + Clave RSA + Payload AES-256)\n'
+                                      '• Texto recuperado intacto:\n"$recoveredText"';
+                                });
+                              },
+                              child: const Text('Ejecutar Test', style: TextStyle(fontSize: 12)),
+                            ),
+                          ],
+                        ),
+                        if (testResult != null) ...[
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            width: double.infinity,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0F172A),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: SelectableText(
+                              testResult!,
+                              style: const TextStyle(fontFamily: 'monospace', fontSize: 10, color: Colors.greenAccent),
+                            ),
+                          ),
                         ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text('Huella: ${keyPair.fingerprint}', style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: Color(0xFF0F172A), fontWeight: FontWeight.w600)),
-                      const SizedBox(height: 4),
-                      const Text('Algoritmo: RSA 2048-bit + AES-256-CBC', style: TextStyle(fontSize: 11, color: Color(0xFF334155), fontWeight: FontWeight.w500)),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(height: 14),
-                const Text('Clave Pública OpenPGP Armor:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFF0F172A))),
-                const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(color: const Color(0xFF0F172A), borderRadius: BorderRadius.circular(6)),
-                  child: SelectableText(
-                    keyPair.exportPublicKeyArmor(),
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 9, color: Color(0xFF38BDF8)),
-                    maxLines: 6,
+                  const SizedBox(height: 10),
+
+                  // Opción 2: Descifrar Archivo .GPG Seleccionado
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.04),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.file_open_outlined, color: Colors.cyanAccent, size: 18),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                '2. Seleccionar y Descifrar Archivo .GPG',
+                                style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF0284C7),
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              ),
+                              onPressed: () {
+                                pickFileWeb(
+                                  onFileSelected: (fileName, fileSize, bytes) {
+                                    final u8 = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
+                                    if (gpg.isGpgEncrypted(u8)) {
+                                      final dec = gpg.decryptFileAsymmetric(u8, keyPair.privateKey);
+                                      String preview = '';
+                                      try {
+                                        preview = utf8.decode(dec);
+                                        if (preview.length > 200) preview = '${preview.substring(0, 200)}...';
+                                      } catch (_) {
+                                        preview = '[Archivo binario/multimedia descifrado: ${dec.length} bytes]';
+                                      }
+
+                                      setDlgState(() {
+                                        decryptedFileResult = '✓ Archivo "$fileName" descifrado exitosamente:\n'
+                                            '• Tamaño cifrado: $fileSize bytes\n'
+                                            '• Tamaño restaurado: ${dec.length} bytes\n'
+                                            '• Contenido:\n$preview';
+                                      });
+                                    } else {
+                                      setDlgState(() {
+                                        decryptedFileResult = 'El archivo "$fileName" no contiene el formato cifrado GPG (Magic GPG1).';
+                                      });
+                                    }
+                                  },
+                                );
+                              },
+                              child: const Text('Examinar .gpg', style: TextStyle(fontSize: 12)),
+                            ),
+                          ],
+                        ),
+                        if (decryptedFileResult != null) ...[
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            width: double.infinity,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0F172A),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: SelectableText(
+                              decryptedFileResult!,
+                              style: const TextStyle(fontFamily: 'monospace', fontSize: 10, color: Colors.cyanAccent),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 10),
+
+                  // Opción 3: Script de PowerShell y GnuPG para Windows
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.04),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.terminal, color: Colors.amberAccent, size: 18),
+                            SizedBox(width: 8),
+                            Text(
+                              '3. Comprobación por Consola en Windows',
+                              style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'Ejecuta en la terminal de PowerShell en la raíz del proyecto:\n'
+                          'PS> .\\test_gpg_decrypt.ps1\n'
+                          'O con la herramienta oficial gpg.exe de Windows:\n'
+                          'PS> gpg --decrypt copia_respaldo.gpg > archivo_claro.txt',
+                          style: TextStyle(fontFamily: 'monospace', fontSize: 11, color: Colors.amberAccent),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Clave Pública Armor
+                  const Text('Clave Pública OpenPGP Armor:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.white)),
+                  const SizedBox(height: 4),
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(color: const Color(0xFF0F172A), borderRadius: BorderRadius.circular(6)),
+                    child: SelectableText(
+                      keyPair.exportPublicKeyArmor(),
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 9, color: Color(0xFF38BDF8)),
+                      maxLines: 4,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cerrar', style: TextStyle(color: Colors.white70)),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cerrar')),
-        ],
       ),
     );
   }

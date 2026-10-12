@@ -2,6 +2,9 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:video_player/video_player.dart';
+import 'package:video_player_win/video_player_win.dart';
 
 const _nativeChannel = MethodChannel('com.example.fylesync/native');
 
@@ -284,3 +287,76 @@ Future<bool> requestStoragePermissions() async {
   }
   return true;
 }
+
+void initPlatformVideoPlayer() {
+  if (Platform.isWindows) {
+    WindowsVideoPlayer.registerWith();
+  }
+}
+
+void clearCachedVideo(String? fileId, String? fileName) {
+  if (Platform.isWindows && fileId != null) {
+    try {
+      final safeName = (fileName != null && fileName.isNotEmpty)
+          ? fileName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')
+          : 'video_$fileId.mp4';
+      final file = File('${Directory.systemTemp.path}${Platform.pathSeparator}fylesync_video_cache${Platform.pathSeparator}${fileId}_$safeName');
+      if (file.existsSync()) {
+        file.deleteSync();
+      }
+    } catch (_) {}
+  }
+}
+
+Future<VideoPlayerController> createVideoPlayerController(
+  String url,
+  Map<String, String> headers, {
+  String? fileName,
+  String? fileId,
+}) async {
+  if (Platform.isWindows) {
+    try {
+      final safeName = (fileName != null && fileName.isNotEmpty)
+          ? fileName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')
+          : 'video_${fileId ?? "temp"}.mp4';
+
+      final tempDir = Directory('${Directory.systemTemp.path}${Platform.pathSeparator}fylesync_video_cache');
+      if (!await tempDir.exists()) {
+        await tempDir.create(recursive: true);
+      }
+
+      final cachedFile = File('${tempDir.path}${Platform.pathSeparator}${fileId ?? "video"}_$safeName');
+
+      // Si el archivo no existe o está incompleto (0 bytes), descargamos usando http de Dart
+      if (!await cachedFile.exists() || await cachedFile.length() == 0) {
+        final client = http.Client();
+        try {
+          final req = http.Request('GET', Uri.parse(url));
+          req.headers.addAll(headers);
+          final streamedRes = await client.send(req);
+          if (streamedRes.statusCode >= 200 && streamedRes.statusCode < 300) {
+            final sink = cachedFile.openWrite();
+            await streamedRes.stream.pipe(sink);
+          } else {
+            debugPrint('Error buffering video for Windows: HTTP ${streamedRes.statusCode}');
+          }
+        } finally {
+          client.close();
+        }
+      }
+
+      if (await cachedFile.exists() && await cachedFile.length() > 0) {
+        return VideoPlayerController.file(cachedFile);
+      }
+    } catch (e) {
+      debugPrint('Error buffering video file for Windows: $e');
+    }
+  }
+
+  // Fallback nativo para Android o Linux
+  return VideoPlayerController.networkUrl(
+    Uri.parse(url),
+    httpHeaders: headers,
+  );
+}
+
