@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'package:video_player/video_player.dart';
 import '../../config/api_config.dart';
@@ -11,12 +12,18 @@ class PreviewScreen extends StatefulWidget {
   final String token;
   final String? mimeType;
 
+  /// Elementos hermanos (galería). Si tiene más de uno se habilita la navegación con flechas.
+  final List<Map<String, dynamic>> gallery;
+  final int initialIndex;
+
   const PreviewScreen({
     super.key,
     required this.id,
     required this.name,
     required this.token,
     required this.mimeType,
+    this.gallery = const [],
+    this.initialIndex = 0,
   });
 
   @override
@@ -29,6 +36,13 @@ class _PreviewScreenState extends State<PreviewScreen> {
   bool _isPdf = false;
   late String _url;
 
+  late String _id;
+  late String _name;
+  String? _mime;
+  int _index = 0;
+  int _loadGen = 0;
+  final FocusNode _focusNode = FocusNode();
+
   // Video Controller
   VideoPlayerController? _videoController;
   bool _isVideoInitialized = false;
@@ -36,53 +50,110 @@ class _PreviewScreenState extends State<PreviewScreen> {
   String? _videoErrorMessage;
   bool _showControls = true;
 
+  bool get _hasGallery => widget.gallery.length > 1;
+
   @override
   void initState() {
     super.initState();
-    _url = widget.token.isEmpty
-        ? '${ApiConfig.streamingUrl}/api/files/files/${widget.id}/content'
-        : '${ApiConfig.streamingUrl}/api/files/files/${widget.id}/content?token=${Uri.encodeComponent(widget.token)}';
+    _index = widget.gallery.isEmpty ? 0 : widget.initialIndex.clamp(0, widget.gallery.length - 1);
+    if (widget.gallery.isNotEmpty) {
+      final item = widget.gallery[_index];
+      _id = item['id'].toString();
+      _name = (item['name'] ?? 'Sin nombre').toString();
+      _mime = item['mimeType']?.toString();
+    } else {
+      _id = widget.id;
+      _name = widget.name;
+      _mime = widget.mimeType;
+    }
+    _loadCurrent();
+  }
 
-    final ext = widget.name.split('.').last.toLowerCase();
-    _isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].contains(ext) ||
-        (widget.mimeType?.startsWith('image/') ?? false);
-    _isVideo = ['mp4', 'mov', 'avi', 'mkv', 'webm'].contains(ext) ||
-        (widget.mimeType?.startsWith('video/') ?? false);
-    _isPdf = ext == 'pdf' || widget.mimeType == 'application/pdf';
+  void _loadCurrent() {
+    _url = widget.token.isEmpty
+        ? '${ApiConfig.streamingUrl}/api/files/files/$_id/content'
+        : '${ApiConfig.streamingUrl}/api/files/files/$_id/content?token=${Uri.encodeComponent(widget.token)}';
+
+    final ext = _name.split('.').last.toLowerCase();
+    _isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].contains(ext) ||
+        (_mime?.startsWith('image/') ?? false);
+    _isVideo = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v'].contains(ext) ||
+        (_mime?.startsWith('video/') ?? false);
+    _isPdf = ext == 'pdf' || _mime == 'application/pdf';
+
+    _loadGen++;
+    _isVideoInitialized = false;
+    _isVideoError = false;
+    _videoErrorMessage = null;
 
     if (_isVideo) {
       _initVideoPlayer();
     }
   }
 
+  void _go(int delta) {
+    if (!_hasGallery) return;
+    final total = widget.gallery.length;
+    final next = (_index + delta + total) % total;
+    _videoController?.dispose();
+    _videoController = null;
+    final item = widget.gallery[next];
+    setState(() {
+      _index = next;
+      _id = item['id'].toString();
+      _name = (item['name'] ?? 'Sin nombre').toString();
+      _mime = item['mimeType']?.toString();
+      _loadCurrent();
+    });
+  }
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (event is KeyDownEvent) {
+      if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+        _go(1);
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+        _go(-1);
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
+  }
+
   Future<void> _initVideoPlayer() async {
+    final gen = _loadGen;
     try {
       final headers = widget.token.isNotEmpty ? {'Authorization': 'Bearer ${widget.token}'} : const <String, String>{};
       final controller = await createVideoPlayerController(
         _url,
         headers,
-        fileName: widget.name,
-        fileId: widget.id,
+        fileName: _name,
+        fileId: _id,
       );
 
-      if (!mounted) {
+      if (!mounted || gen != _loadGen) {
         controller.dispose();
         return;
       }
 
       _videoController = controller;
-      await _videoController!.initialize();
+      await controller.initialize();
 
-      if (mounted) {
-        setState(() {
-          _isVideoInitialized = true;
-          _isVideoError = false;
-        });
-        _videoController!.play();
+      if (!mounted || gen != _loadGen) {
+        controller.dispose();
+        if (identical(_videoController, controller)) _videoController = null;
+        return;
       }
 
-      _videoController!.addListener(() {
-        if (mounted) setState(() {});
+      setState(() {
+        _isVideoInitialized = true;
+        _isVideoError = false;
+      });
+      controller.play();
+
+      controller.addListener(() {
+        if (mounted && gen == _loadGen) setState(() {});
       });
     } catch (err) {
       if (mounted) {
@@ -96,12 +167,13 @@ class _PreviewScreenState extends State<PreviewScreen> {
 
   @override
   void dispose() {
+    _focusNode.dispose();
     _videoController?.dispose();
     super.dispose();
   }
 
   void _downloadFile() {
-    openUrlOrDownload(_url, downloadName: widget.name);
+    openUrlOrDownload(_url, downloadName: _name);
   }
 
   String _formatDuration(Duration duration) {
@@ -111,30 +183,84 @@ class _PreviewScreenState extends State<PreviewScreen> {
     return '$minutes:$seconds';
   }
 
+  Widget _navArrow({required bool left}) {
+    return Positioned(
+      left: left ? 12 : null,
+      right: left ? null : 12,
+      top: 0,
+      bottom: 0,
+      child: Center(
+        child: Material(
+          color: Colors.black54,
+          shape: const CircleBorder(),
+          child: IconButton(
+            iconSize: 32,
+            color: Colors.white,
+            tooltip: left ? 'Anterior (←)' : 'Siguiente (→)',
+            icon: Icon(left ? Icons.chevron_left_rounded : Icons.chevron_right_rounded),
+            onPressed: () => _go(left ? -1 : 1),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF0F172A),
-        foregroundColor: Colors.white,
-        title: Text(widget.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-        actions: [
-          if (_isPdf)
-            IconButton(
-              icon: const Icon(Icons.open_in_new),
-              tooltip: 'Abrir PDF en pestaña',
-              onPressed: () => openUrlOrDownload(_url, downloadName: widget.name),
-            ),
-          IconButton(
-            icon: const Icon(Icons.download),
-            tooltip: 'Descargar archivo',
-            onPressed: _downloadFile,
+    return Focus(
+      focusNode: _focusNode,
+      autofocus: true,
+      onKeyEvent: _onKey,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          backgroundColor: const Color(0xFF0F172A),
+          foregroundColor: Colors.white,
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(_name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+              if (_hasGallery)
+                Container(
+                  margin: const EdgeInsets.only(left: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.white12,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text('${_index + 1} / ${widget.gallery.length}', style: const TextStyle(fontSize: 12)),
+                ),
+            ],
           ),
-        ],
-      ),
-      body: Center(
-        child: _buildPreview(),
+          actions: [
+            if (_isPdf)
+              IconButton(
+                icon: const Icon(Icons.open_in_new),
+                tooltip: 'Abrir PDF en pestaña',
+                onPressed: () => openUrlOrDownload(_url, downloadName: _name),
+              ),
+            IconButton(
+              icon: const Icon(Icons.download),
+              tooltip: 'Descargar archivo',
+              onPressed: _downloadFile,
+            ),
+          ],
+        ),
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: Center(
+                key: ValueKey(_id),
+                child: _buildPreview(),
+              ),
+            ),
+            if (_hasGallery) ...[
+              _navArrow(left: true),
+              _navArrow(left: false),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -187,7 +313,7 @@ class _PreviewScreenState extends State<PreviewScreen> {
               const SizedBox(height: 20),
               ElevatedButton.icon(
                 onPressed: () {
-                  clearCachedVideo(widget.id, widget.name);
+                  clearCachedVideo(_id, _name);
                   setState(() {
                     _isVideoError = false;
                     _isVideoInitialized = false;
@@ -349,7 +475,7 @@ class _PreviewScreenState extends State<PreviewScreen> {
                 const Icon(Icons.insert_drive_file, size: 64, color: Colors.indigoAccent),
                 const SizedBox(height: 16),
                 Text(
-                  widget.name,
+                  _name,
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                 ),

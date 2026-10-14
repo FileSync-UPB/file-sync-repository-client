@@ -14,6 +14,9 @@ import '../../platform/platform_utils.dart';
 
 enum FileSection {
   myDrive,
+  images,
+  videos,
+  documents,
   sharedWithMe,
   recent,
   starred,
@@ -115,6 +118,12 @@ class _HomeScreenState extends State<HomeScreen> {
       _errorMessage = null;
     });
 
+    final category = _categoryOfSection(_currentSection);
+    if (category != null) {
+      await _fetchCategory(category);
+      return;
+    }
+
     try {
       String urlStr;
       if (_currentParentId != null) {
@@ -136,6 +145,9 @@ class _HomeScreenState extends State<HomeScreen> {
           case FileSection.trash:
             urlStr = '${ApiConfig.streamingUrl}/api/files/trash';
             break;
+          case FileSection.images:
+          case FileSection.videos:
+          case FileSection.documents:
           case FileSection.sync:
           case FileSection.hpc:
           case FileSection.gpg:
@@ -175,6 +187,113 @@ class _HomeScreenState extends State<HomeScreen> {
         });
       }
     }
+  }
+
+  // ---------------------------------------------------------------
+  // Galerías por categoría (Imágenes / Videos / Archivos)
+  // ---------------------------------------------------------------
+
+  String? _categoryOfSection(FileSection section) {
+    switch (section) {
+      case FileSection.images:
+        return 'images';
+      case FileSection.videos:
+        return 'videos';
+      case FileSection.documents:
+        return 'files';
+      default:
+        return null;
+    }
+  }
+
+  bool _isVideoFile(String? mimeType, String name) {
+    final ext = name.split('.').last.toLowerCase();
+    return ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v'].contains(ext) ||
+        (mimeType?.startsWith('video/') ?? false);
+  }
+
+  String _categoryOfItem(String? mimeType, String name) {
+    if (_isImage(mimeType, name)) return 'images';
+    if (_isVideoFile(mimeType, name)) return 'videos';
+    return 'files';
+  }
+
+  Future<void> _fetchCategory(String category) async {
+    try {
+      final headers = {'Authorization': 'Bearer ${widget.token}'};
+      List<dynamic> items;
+
+      final response = await http.get(
+        Uri.parse('${ApiConfig.streamingUrl}/api/files/category/$category'),
+        headers: headers,
+      );
+
+      if (response.statusCode == 200) {
+        items = jsonDecode(response.body)['items'] ?? [];
+      } else if (response.statusCode == 401) {
+        await _handleLogout();
+        return;
+      } else {
+        // Backend sin el endpoint nuevo: recorrer el árbol de carpetas desde el cliente.
+        items = await _crawlCategory(category, headers);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _items = items;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Error de conexión: $e';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<List<dynamic>> _crawlCategory(String category, Map<String, String> headers) async {
+    final result = <dynamic>[];
+    final seen = <String>{};
+    final queue = <String?>[null];
+    var visitedFolders = 0;
+
+    Future<List<dynamic>> list(String url) async {
+      final r = await http.get(Uri.parse(url), headers: headers);
+      if (r.statusCode != 200) return [];
+      return jsonDecode(r.body)['items'] ?? [];
+    }
+
+    void consume(List<dynamic> entries) {
+      for (final it in entries) {
+        final id = it['id'].toString();
+        if (!seen.add(id)) continue;
+        if (it['kind'] == 'folder') {
+          queue.add(id);
+        } else if (_categoryOfItem(it['mimeType'], (it['name'] ?? '').toString()) == category) {
+          result.add(it);
+        }
+      }
+    }
+
+    // Elementos compartidos conmigo también cuentan para la galería.
+    consume(await list('${ApiConfig.streamingUrl}/api/files/shared'));
+
+    while (queue.isNotEmpty && visitedFolders < 500) {
+      final parent = queue.removeAt(0);
+      visitedFolders++;
+      final url = parent == null
+          ? '${ApiConfig.streamingUrl}/api/files'
+          : '${ApiConfig.streamingUrl}/api/files?parentId=${Uri.encodeComponent(parent)}';
+      consume(await list(url));
+    }
+
+    return result;
   }
 
   Future<void> _createFolderDialog() async {
@@ -425,6 +544,20 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _previewFile(String id, String name, String? mimeType) {
+    // Galería: todos los archivos visibles de la misma categoría (para navegar con flechas).
+    final category = _categoryOfItem(mimeType, name);
+    final gallery = <Map<String, dynamic>>[];
+    for (final it in _items) {
+      if (it['kind'] == 'folder') continue;
+      if (_categoryOfItem(it['mimeType'], (it['name'] ?? '').toString()) != category) continue;
+      gallery.add(Map<String, dynamic>.from(it as Map));
+    }
+    var index = gallery.indexWhere((g) => g['id'].toString() == id);
+    if (index < 0) {
+      gallery.insert(0, {'id': id, 'name': name, 'mimeType': mimeType});
+      index = 0;
+    }
+
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => PreviewScreen(
@@ -432,6 +565,8 @@ class _HomeScreenState extends State<HomeScreen> {
           name: name,
           token: widget.token,
           mimeType: mimeType,
+          gallery: gallery,
+          initialIndex: index,
         ),
       ),
     );
@@ -474,6 +609,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _getSectionTitle(FileSection section) {
     switch (section) {
+      case FileSection.images:
+        return 'Imágenes';
+      case FileSection.videos:
+        return 'Videos';
+      case FileSection.documents:
+        return 'Archivos';
       case FileSection.myDrive:
         return 'Mi Unidad';
       case FileSection.sharedWithMe:
@@ -495,6 +636,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _getSectionSubtitle(FileSection section) {
     switch (section) {
+      case FileSection.images:
+        return 'Galería con todas tus imágenes, sin importar la carpeta';
+      case FileSection.videos:
+        return 'Galería con todos tus videos, sin importar la carpeta';
+      case FileSection.documents:
+        return 'Todos los archivos que no son imágenes ni videos';
       case FileSection.myDrive:
         return 'Tus archivos y carpetas en la nube';
       case FileSection.sharedWithMe:
@@ -516,6 +663,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   IconData _getSectionEmptyIcon(FileSection section) {
     switch (section) {
+      case FileSection.images:
+        return Icons.photo_library_outlined;
+      case FileSection.videos:
+        return Icons.video_library_outlined;
+      case FileSection.documents:
+        return Icons.description_outlined;
       case FileSection.myDrive:
         return Icons.folder_open;
       case FileSection.sharedWithMe:
@@ -537,6 +690,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _getSectionEmptyTitle(FileSection section) {
     switch (section) {
+      case FileSection.images:
+        return 'No hay imágenes';
+      case FileSection.videos:
+        return 'No hay videos';
+      case FileSection.documents:
+        return 'No hay archivos';
       case FileSection.myDrive:
         return 'Esta carpeta está vacía';
       case FileSection.sharedWithMe:
@@ -558,6 +717,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _getSectionEmptySubtitle(FileSection section) {
     switch (section) {
+      case FileSection.images:
+        return 'Las imágenes que subas aparecerán aquí, vivan en la carpeta que vivan';
+      case FileSection.videos:
+        return 'Los videos que subas aparecerán aquí, vivan en la carpeta que vivan';
+      case FileSection.documents:
+        return 'Aquí se listan los documentos y demás archivos que no son imágenes ni videos';
       case FileSection.myDrive:
         return 'Crea una nueva carpeta o sube archivos para comenzar';
       case FileSection.sharedWithMe:
@@ -1912,6 +2077,9 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             children: [
               _buildSidebarItem(Icons.storage, 'Mi Unidad', _currentSection == FileSection.myDrive, () => _switchSection(FileSection.myDrive), isDrawer: isDrawer),
+              _buildSidebarItem(Icons.photo_library_outlined, 'Imágenes', _currentSection == FileSection.images, () => _switchSection(FileSection.images), isDrawer: isDrawer),
+              _buildSidebarItem(Icons.video_library_outlined, 'Videos', _currentSection == FileSection.videos, () => _switchSection(FileSection.videos), isDrawer: isDrawer),
+              _buildSidebarItem(Icons.description_outlined, 'Archivos', _currentSection == FileSection.documents, () => _switchSection(FileSection.documents), isDrawer: isDrawer),
               _buildSidebarItem(Icons.group_outlined, 'Compartidos conmigo', _currentSection == FileSection.sharedWithMe, () => _switchSection(FileSection.sharedWithMe), isDrawer: isDrawer),
               _buildSidebarItem(Icons.access_time, 'Recientes', _currentSection == FileSection.recent, () => _switchSection(FileSection.recent), isDrawer: isDrawer),
               _buildSidebarItem(Icons.star_outline, 'Destacados', _currentSection == FileSection.starred, () => _switchSection(FileSection.starred), isDrawer: isDrawer),
